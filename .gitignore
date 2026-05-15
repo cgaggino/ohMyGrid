@@ -1,0 +1,32 @@
+# Build output
+bin/
+obj/
+*.dll
+*.pdb
+*.mdb
+*.user
+
+# IDEs
+.vs/
+.idea/
+*.suo
+*.userprefs
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env / build paths (Valheim install lives outside repo)
+.env
+*.local.props
+Directory.Build.props.user
+
+# Thunderstore packaging output
+dist/
+*.zip
+!icon-source.zip
+
+# NuGet
+*.nupkg
+packages/

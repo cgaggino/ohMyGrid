@@ -1,0 +1,74 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>OhMyGrid</AssemblyName>
+    <RootNamespace>OhMyGrid</RootNamespace>
+    <Version>0.1.0</Version>
+    <Description>Plant crops in circular/donut grids in Valheim.</Description>
+    <Authors>cgaggino</Authors>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <!--
+    Point at your local Valheim install. The DLLs themselves are NOT in this
+    repo. Set the env var VALHEIM_INSTALL, or override the property on the
+    command line: dotnet build -p:ValheimInstall="/path/to/Valheim"
+  -->
+  <PropertyGroup>
+    <ValheimInstall Condition="'$(ValheimInstall)' == ''">$(VALHEIM_INSTALL)</ValheimInstall>
+    <ValheimManaged>$(ValheimInstall)/valheim_Data/Managed</ValheimManaged>
+    <ValheimBepInExCore>$(ValheimInstall)/BepInEx/core</ValheimBepInExCore>
+  </PropertyGroup>
+
+  <Target Name="CheckValheimInstall" BeforeTargets="BeforeBuild">
+    <Error
+      Condition="'$(ValheimInstall)' == '' Or !Exists('$(ValheimManaged)')"
+      Text="ValheimInstall is not set or '$(ValheimManaged)' does not exist. Set the VALHEIM_INSTALL env var to your Valheim folder (e.g. ~/.steam/steam/steamapps/common/Valheim)." />
+  </Target>
+
+  <ItemGroup>
+    <!-- Targeting pack so net472 builds on Linux/macOS too. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Valheim game assembly + Unity modules. Private=false keeps them out of the output. -->
+  <ItemGroup>
+    <Reference Include="assembly_valheim">
+      <HintPath>$(ValheimManaged)/assembly_valheim.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ValheimManaged)/UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ValheimManaged)/UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- BepInEx + HarmonyX from the Valheim install (matches the runtime exactly). -->
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(ValheimBepInExCore)/BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(ValheimBepInExCore)/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
