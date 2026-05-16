@@ -4,6 +4,7 @@ using BepInEx.Logging;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace OhMyGrid
@@ -29,6 +30,12 @@ namespace OhMyGrid
         private ConfigEntry<float> _spacing;
 
         private ConfigEntry<float> _autoSnapRadius;
+        private ConfigEntry<CenterMode> _centerMode;
+
+        private ConfigEntry<bool> _showCostOverlay;
+
+        private ConfigEntry<bool> _massInteractEnabled;
+        private ConfigEntry<float> _massInteractRadius;
 
         private ConfigEntry<KeyboardShortcut> _dumpGridHotkey;
         private ConfigEntry<KeyboardShortcut> _cycleModeHotkey;
@@ -37,8 +44,7 @@ namespace OhMyGrid
         private ConfigEntry<KeyboardShortcut> _increaseInnerHotkey;
         private ConfigEntry<KeyboardShortcut> _decreaseInnerHotkey;
 
-        // Runtime mode (cycled with F7). Starts at Player each game session.
-        private CenterMode _centerMode = CenterMode.Player;
+        // Runtime state.
         private Vector3 _fixedCenter;
         private bool _hasSnap;
 
@@ -48,6 +54,15 @@ namespace OhMyGrid
         // a parallel list for it — validity is checked against the source ghost's Plant.
         private readonly List<Piece> _ghostClonePieces = new List<Piece>();
         private GameObject _lastSourceGhost;
+
+        // Overlay state (slice F): cached from the source ghost when it changes,
+        // and the live count of valid points so the overlay shows only what we'd plant.
+        private Piece.Requirement[] _activeResources;
+        private GameObject[] _activeGrownPrefabs;
+        private string _activePieceLabel;
+        private int _validPointsCount;
+        private int _totalPointsCount;
+        private readonly StringBuilder _overlaySb = new StringBuilder(256);
 
         private static OhMyGridPlugin Instance;
         private static bool _inDonutPlace;
@@ -78,6 +93,18 @@ namespace OhMyGrid
                 "of all Plants found within this radius from the cursor — so for " +
                 "concentric donut placement, this should be ≥ the outer radius of " +
                 "the existing donut you're aligning to.");
+            _centerMode = Config.Bind("Center", "Mode", CenterMode.Player,
+                "Current center mode. F7 cycles. Persists across sessions; if the " +
+                "saved value is Fixed it resets to Player on load (no persisted fixed center).");
+            if (_centerMode.Value == CenterMode.Fixed) _centerMode.Value = CenterMode.Player;
+
+            _showCostOverlay = Config.Bind("Overlay", "ShowCostOverlay", true,
+                "Show an on-screen overlay with valid-point count, required seeds and expected yield while a plant ghost is active.");
+
+            _massInteractEnabled = Config.Bind("MassInteract", "Enabled", true,
+                "Shift+E interacts with all Pickable / Fireplace / Smelter switches within MassInteractRadius.");
+            _massInteractRadius = Config.Bind("MassInteract", "Radius", 5f,
+                "Search radius (m) for Shift+E mass interact.");
 
             _dumpGridHotkey = Config.Bind("Hotkeys", "DumpGrid",
                 new KeyboardShortcut(KeyCode.F8),
@@ -146,17 +173,17 @@ namespace OhMyGrid
             // when we land on Fixed it pins exactly where the donut already was.
             var snapshotBefore = GetDonutCenter(player, ghost);
 
-            _centerMode = NextMode(_centerMode);
+            _centerMode.Value = NextMode(_centerMode.Value);
 
             string message;
-            if (_centerMode == CenterMode.Fixed)
+            if (_centerMode.Value == CenterMode.Fixed)
             {
                 _fixedCenter = snapshotBefore;
                 message = $"Mode: Fixed @ ({_fixedCenter.x:0.##}, {_fixedCenter.z:0.##})";
             }
             else
             {
-                message = $"Mode: {_centerMode}";
+                message = $"Mode: {_centerMode.Value}";
             }
             Log.LogInfo(message);
             ShowHudMessage(message);
@@ -190,12 +217,12 @@ namespace OhMyGrid
 
         private Vector3 GetDonutCenter(Player player, GameObject ghost)
         {
-            if (_centerMode != CenterMode.CursorSnap && _hasSnap)
+            if (_centerMode.Value != CenterMode.CursorSnap && _hasSnap)
             {
                 _hasSnap = false;
             }
 
-            switch (_centerMode)
+            switch (_centerMode.Value)
             {
                 case CenterMode.Fixed:
                     return _fixedCenter;
@@ -287,6 +314,11 @@ namespace OhMyGrid
             {
                 HideAllClones();
                 _lastSourceGhost = null;
+                _activeResources = null;
+                _activeGrownPrefabs = null;
+                _activePieceLabel = null;
+                _validPointsCount = 0;
+                _totalPointsCount = 0;
                 return;
             }
 
@@ -295,6 +327,14 @@ namespace OhMyGrid
             {
                 DestroyAllClones();
                 _lastSourceGhost = ghost;
+
+                // Cache the resource/yield info for the overlay (slice F).
+                var sourcePiece = ghost.GetComponent<Piece>();
+                _activeResources = sourcePiece != null ? sourcePiece.m_resources : null;
+                _activeGrownPrefabs = sourcePlant.m_grownPrefabs;
+                _activePieceLabel = sourcePiece != null
+                    ? LocalizeOrRaw(sourcePiece.m_name)
+                    : ghost.name;
             }
 
             var center = GetDonutCenter(player, ghost);
@@ -304,6 +344,7 @@ namespace OhMyGrid
             {
                 points.Add(p);
             }
+            _totalPointsCount = points.Count;
 
             while (_ghostClones.Count < points.Count)
             {
@@ -330,6 +371,9 @@ namespace OhMyGrid
             // pass picks up the cursor position normally.
             var originalSourcePos = ghost.transform.position;
             var originalSourceRot = ghost.transform.rotation;
+            var playerXZ = new Vector2(player.transform.position.x, player.transform.position.z);
+            var maxPlaceDistSq = player.m_maxPlaceDistance * player.m_maxPlaceDistance;
+            var valid = 0;
 
             for (int i = 0; i < points.Count; i++)
             {
@@ -341,14 +385,24 @@ namespace OhMyGrid
                 clone.transform.rotation = originalSourceRot;
                 if (!clone.activeSelf) clone.SetActive(true);
 
+                // Out of reach? Red, never planted.
+                var dx = pt.X - playerXZ.x;
+                var dz = pt.Z - playerXZ.y;
+                var tooFar = dx * dx + dz * dz > maxPlaceDistSq;
+
+                // Move source ghost to test position for HaveGrowSpace.
                 ghost.transform.position = pos;
-                var invalid = !HaveGrowSpaceCall(sourcePlant);
+                var noSpace = !HaveGrowSpaceCall(sourcePlant);
+
+                var invalid = tooFar || noSpace;
+                if (!invalid) valid++;
                 var clonePiece = _ghostClonePieces[i];
                 if (clonePiece != null) clonePiece.SetInvalidPlacementHeightlight(invalid);
             }
 
             ghost.transform.position = originalSourcePos;
             ghost.transform.rotation = originalSourceRot;
+            _validPointsCount = valid;
             for (int i = points.Count; i < _ghostClones.Count; i++)
             {
                 if (_ghostClones[i].activeSelf) _ghostClones[i].SetActive(false);
@@ -388,8 +442,10 @@ namespace OhMyGrid
             var originalGhostPos = ghost.transform.position;
             var originalGhostRot = ghost.transform.rotation;
             var ghostPlant = ghost.GetComponent<Plant>();
+            var playerXZ = new Vector2(player.transform.position.x, player.transform.position.z);
+            var maxPlaceDistSq = player.m_maxPlaceDistance * player.m_maxPlaceDistance;
 
-            int planted = 0, noSpace = 0;
+            int planted = 0, noSpace = 0, tooFar = 0;
             bool outOfResources = false;
 
             _inDonutPlace = true;
@@ -402,6 +458,14 @@ namespace OhMyGrid
                     {
                         outOfResources = true;
                         break;
+                    }
+
+                    var dx = p.X - playerXZ.x;
+                    var dz = p.Z - playerXZ.y;
+                    if (dx * dx + dz * dz > maxPlaceDistSq)
+                    {
+                        tooFar++;
+                        continue;
                     }
 
                     var y = SampleGroundY(p.X, p.Z, originalGhostPos.y);
@@ -437,9 +501,121 @@ namespace OhMyGrid
             }
 
             Log.LogInfo(
-                $"Donut plant: planted={planted} noSpace={noSpace}" +
+                $"Donut plant: planted={planted} noSpace={noSpace} tooFar={tooFar}" +
                 (outOfResources ? " (out of resources)" : ""));
             return planted > 0;
+        }
+
+        private void OnGUI()
+        {
+            if (!_showCostOverlay.Value) return;
+            if (_totalPointsCount == 0) return;
+            if (_activeResources == null && _activeGrownPrefabs == null) return;
+
+            var sb = _overlaySb;
+            sb.Length = 0;
+            sb.Append(_activePieceLabel ?? "Plant")
+              .Append(" · valid ").Append(_validPointsCount)
+              .Append('/').Append(_totalPointsCount);
+
+            if (_activeResources != null)
+            {
+                for (int i = 0; i < _activeResources.Length; i++)
+                {
+                    var req = _activeResources[i];
+                    if (req == null || req.m_resItem == null || req.m_amount <= 0) continue;
+                    var shared = req.m_resItem.m_itemData?.m_shared;
+                    if (shared == null) continue;
+                    sb.Append('\n')
+                      .Append("Need: ")
+                      .Append(LocalizeOrRaw(shared.m_name))
+                      .Append(" × ")
+                      .Append(req.m_amount * _validPointsCount);
+                }
+            }
+
+            if (_activeGrownPrefabs != null && _activeGrownPrefabs.Length > 0)
+            {
+                // First grown variant is a fine proxy — vanilla plants all yield the
+                // same item across their growth variants. m_amount is the per-plant
+                // base yield (Pickable handles bonus rolls elsewhere).
+                var grown = _activeGrownPrefabs[0];
+                var pickable = grown != null ? grown.GetComponent<Pickable>() : null;
+                if (pickable != null && pickable.m_itemPrefab != null)
+                {
+                    var drop = pickable.m_itemPrefab.GetComponent<ItemDrop>();
+                    var shared = drop != null ? drop.m_itemData?.m_shared : null;
+                    if (shared != null)
+                    {
+                        sb.Append('\n')
+                          .Append("Yield: ~")
+                          .Append(pickable.m_amount * _validPointsCount)
+                          .Append(' ')
+                          .Append(LocalizeOrRaw(shared.m_name));
+                    }
+                }
+            }
+
+            var style = GUI.skin.box;
+            GUI.Box(new Rect(20, 130, 360, 110), sb.ToString(), style);
+        }
+
+        private static string LocalizeOrRaw(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return string.Empty;
+            var loc = Localization.instance;
+            return loc != null ? loc.Localize(key) : key;
+        }
+
+        private void MassInteract(Player player)
+        {
+            var radius = _massInteractRadius.Value;
+            var hits = Physics.OverlapSphere(player.transform.position, radius);
+            var seen = new HashSet<int>();
+            int picked = 0, refueled = 0, smelted = 0;
+
+            for (int i = 0; i < hits.Length; i++)
+            {
+                var col = hits[i];
+
+                var pickable = col.GetComponentInParent<Pickable>();
+                if (pickable != null && seen.Add(pickable.GetInstanceID()))
+                {
+                    try { if (pickable.Interact(player, false, false)) picked++; }
+                    catch (Exception e) { Log.LogWarning($"MassInteract pickable failed: {e.Message}"); }
+                    continue;
+                }
+
+                var fireplace = col.GetComponentInParent<Fireplace>();
+                if (fireplace != null && seen.Add(fireplace.GetInstanceID()))
+                {
+                    try { if (fireplace.Interact(player, false, false)) refueled++; }
+                    catch (Exception e) { Log.LogWarning($"MassInteract fireplace failed: {e.Message}"); }
+                    continue;
+                }
+
+                var smelter = col.GetComponentInParent<Smelter>();
+                if (smelter != null && seen.Add(smelter.GetInstanceID()))
+                {
+                    var any = false;
+                    try
+                    {
+                        if (smelter.m_addOreSwitch != null
+                            && smelter.m_addOreSwitch.Interact(player, false, false)) any = true;
+                        if (smelter.m_addWoodSwitch != null
+                            && smelter.m_addWoodSwitch.Interact(player, false, false)) any = true;
+                    }
+                    catch (Exception e) { Log.LogWarning($"MassInteract smelter failed: {e.Message}"); }
+                    if (any) smelted++;
+                }
+            }
+
+            if (picked > 0 || refueled > 0 || smelted > 0)
+            {
+                var msg = $"Shift+E: picked={picked} fueled={refueled} smelter={smelted}";
+                Log.LogInfo(msg);
+                ShowHudMessage(msg);
+            }
         }
 
         [HarmonyPatch(typeof(Player), nameof(Player.TryPlacePiece))]
@@ -455,6 +631,20 @@ namespace OhMyGrid
                 if (ghost == null || ghost.GetComponent<Plant>() == null) return true;
 
                 __result = Instance.PlaceDonut(__instance, piece, ghost);
+                return false;
+            }
+        }
+
+        [HarmonyPatch(typeof(Player), "Interact")]
+        private static class InteractPatch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Player __instance, GameObject go, bool hold, bool alt)
+            {
+                if (Instance == null || !Instance._massInteractEnabled.Value) return true;
+                if (hold || alt) return true;
+                if (!Input.GetKey(KeyCode.LeftShift) && !Input.GetKey(KeyCode.RightShift)) return true;
+                Instance.MassInteract(__instance);
                 return false;
             }
         }

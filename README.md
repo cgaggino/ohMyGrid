@@ -58,6 +58,7 @@ All hotkeys are configurable via BepInEx config (`[Hotkeys]` section).
 | `Shift+]` | Inner radius +1 spacing step |
 | `Shift+[` | Inner radius −1 spacing step |
 | Left-click | Plant the entire donut (when holding a plant on the cultivator) |
+| `Shift+E` | Mass-interact: pick up Pickables, fuel Fireplaces, feed Smelter switches within `MassInteract.Radius` (default 5m). Normal E unchanged. |
 
 ### Center modes (F7 cycles)
 
@@ -81,6 +82,10 @@ under `[Grid]`).
 - [x] Config (inner/outer/spacing) + radius/lock hotkeys
 - [x] CenterMode (Player/Fixed/Cursor/CursorSnap) via F7 cycle + HUD toast
 - [x] Auto-snap: align donut center to centroid of nearby Plants in CursorSnap
+- [x] Center mode persists across sessions (Fixed is downgraded to Player on load)
+- [x] Max-placement-distance check: out-of-reach donut points tint red and are skipped on click
+- [x] Cost/yield overlay: `OhMyGrid · valid 18/20\nNeed: Seed-onion × 18\nYield: ~18 Onion` (only counts green/valid points)
+- [x] Shift+E mass interact: Pickables / Fireplaces / Smelter switches within MassInteract.Radius
 - [ ] **Known limitations / next slices:**
   - [ ] Centroid snap is biased when the surrounding plant pattern is
         asymmetric (partial / half donuts, irregular clusters). Better
