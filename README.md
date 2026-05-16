@@ -4,10 +4,12 @@ Valheim mod that lets you plant crops in **non-square grid patterns** — circul
 donut (inner + outer radius), and other shapes — as an alternative to the
 default rectangular grid.
 
-Status: **multi-plant working**. While holding a plant on the cultivator, a
-donut of ghost previews shows around the player; left-click plants the whole
-donut, with per-point grow-space validation and inventory cost. Center can be
-locked (F7) to chain concentric donuts of different crops.
+Status: **multi-plant + cursor/snap modes working**. While holding a plant on
+the cultivator, a donut of ghost previews shows around the player; left-click
+plants the whole donut, with per-point grow-space validation and inventory
+cost. F7 cycles the center between Player / Fixed (lock) / Cursor / CursorSnap
+(auto-aligns to the centroid of nearby plants for concentric placement). Mode
+changes show as a TopLeft HUD toast.
 
 ## Stack
 
@@ -49,13 +51,23 @@ All hotkeys are configurable via BepInEx config (`[Hotkeys]` section).
 
 | Key | Action |
 |---|---|
-| `F7` | Toggle lock/unlock of the donut center (anchors at current position) |
+| `F7` | Cycle center mode: **Player → Fixed → Cursor → CursorSnap → Player** |
 | `F8` | Dump every donut grid point to the BepInEx log |
 | `]` | Outer radius +1 spacing step |
 | `[` | Outer radius −1 spacing step |
 | `Shift+]` | Inner radius +1 spacing step |
 | `Shift+[` | Inner radius −1 spacing step |
 | Left-click | Plant the entire donut (when holding a plant on the cultivator) |
+
+### Center modes (F7 cycles)
+
+- **Player** — donut centered on you, moves as you walk.
+- **Fixed** — pins the center where it currently is. Walk away freely; donut stays.
+- **Cursor** — donut centered wherever the cultivator ghost is aiming.
+- **CursorSnap** — like Cursor, but the center auto-snaps to the *centroid* of
+  any existing Plants found within `AutoSnapRadius` (default 12 m). For
+  concentric placement: stand inside an existing donut, F7 to CursorSnap,
+  shrink outer radius (`[`) and plant the inner ring.
 
 Default grid: `InnerRadius=2m`, `OuterRadius=6m`, `Spacing=1m` (configurable
 under `[Grid]`).
@@ -67,11 +79,22 @@ under `[Grid]`).
 - [x] Placement ghosts at generated positions
 - [x] Multi-plant on click with `HaveGrowSpace()` validation + inventory cost
 - [x] Config (inner/outer/spacing) + radius/lock hotkeys
-- [ ] **Next slice:**
-  - [ ] `CenterMode = Player | Cursor` — alternative center anchored at the
-        cursor (PlantEasily-style) instead of the player.
-  - [ ] Auto-snap: detect a nearby existing plant cluster and align the donut
-        center to it automatically (F7 lock is the manual version).
+- [x] CenterMode (Player/Fixed/Cursor/CursorSnap) via F7 cycle + HUD toast
+- [x] Auto-snap: align donut center to centroid of nearby Plants in CursorSnap
+- [ ] **Known limitations / next slices:**
+  - [ ] Centroid snap is biased when the surrounding plant pattern is
+        asymmetric (partial / half donuts, irregular clusters). Better
+        approach: least-squares circle fit, or median-of-XZ, or detecting a
+        ring and using its geometric center.
+  - [ ] `Plant.Awake()` throws an NRE on each clone because the placement
+        ghost has no `ZNetView`. The exception is benign (visual still
+        renders, `HaveGrowSpace` works against the source ghost), but it
+        spams the log. Workaround idea: SetActive(false) the source briefly
+        so the clone instantiates inactive, attach a dummy ZNetView, then
+        activate; or strip the Plant component from the clone before
+        activation.
+  - [ ] Out-of-game preference persistence for F7 mode (currently resets to
+        Player each session).
 - [ ] Thunderstore package (manifest + icon + CI/CD)
 
 ## Notes
