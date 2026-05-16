@@ -2,6 +2,7 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -36,15 +37,28 @@ namespace OhMyGrid
         private Vector3 _lockedCenter;
 
         private readonly List<GameObject> _ghostClones = new List<GameObject>();
+        // Cached components per clone (parallel to _ghostClones) to avoid
+        // GetComponent every frame for the validity tint check.
+        private readonly List<Plant> _ghostClonePlants = new List<Plant>();
+        private readonly List<Piece> _ghostClonePieces = new List<Piece>();
         private GameObject _lastSourceGhost;
+
+        private static OhMyGridPlugin Instance;
+        private static bool _inDonutPlace;
 
         // m_placementGhost is private on Player; FieldRef gives cheap typed access.
         private static readonly AccessTools.FieldRef<Player, GameObject> PlacementGhostRef =
             AccessTools.FieldRefAccess<Player, GameObject>("m_placementGhost");
 
+        // Plant.HaveGrowSpace is private in 0.221.x; MethodDelegate gives a fast typed call.
+        private static readonly Func<Plant, bool> HaveGrowSpaceCall =
+            AccessTools.MethodDelegate<Func<Plant, bool>>(
+                AccessTools.Method(typeof(Plant), "HaveGrowSpace"));
+
         private void Awake()
         {
             Log = Logger;
+            Instance = this;
 
             _innerRadius = Config.Bind("Grid", "InnerRadius", 2f,
                 "Inner radius (m) of the donut. Points inside this radius are skipped.");
@@ -181,12 +195,14 @@ namespace OhMyGrid
 
             while (_ghostClones.Count < points.Count)
             {
-                var clone = Object.Instantiate(ghost);
+                var clone = UnityEngine.Object.Instantiate(ghost);
                 foreach (var c in clone.GetComponentsInChildren<Collider>())
                 {
                     c.enabled = false;
                 }
                 _ghostClones.Add(clone);
+                _ghostClonePlants.Add(clone.GetComponent<Plant>());
+                _ghostClonePieces.Add(clone.GetComponent<Piece>());
             }
 
             for (int i = 0; i < points.Count; i++)
@@ -197,6 +213,16 @@ namespace OhMyGrid
                 clone.transform.position = new Vector3(pt.X, y, pt.Z);
                 clone.transform.rotation = ghost.transform.rotation;
                 if (!clone.activeSelf) clone.SetActive(true);
+
+                // Per-clone red tint when the position fails Plant.HaveGrowSpace.
+                // HaveGrowSpace reads transform.position, so this works after the move above.
+                var clonePlant = _ghostClonePlants[i];
+                var clonePiece = _ghostClonePieces[i];
+                if (clonePiece != null)
+                {
+                    var invalid = clonePlant != null && !HaveGrowSpaceCall(clonePlant);
+                    clonePiece.SetInvalidPlacementHeightlight(invalid);
+                }
             }
             for (int i = points.Count; i < _ghostClones.Count; i++)
             {
@@ -225,15 +251,95 @@ namespace OhMyGrid
         {
             for (int i = 0; i < _ghostClones.Count; i++)
             {
-                if (_ghostClones[i] != null) Object.Destroy(_ghostClones[i]);
+                if (_ghostClones[i] != null) UnityEngine.Object.Destroy(_ghostClones[i]);
             }
             _ghostClones.Clear();
+            _ghostClonePlants.Clear();
+            _ghostClonePieces.Clear();
+        }
+
+        private bool PlaceDonut(Player player, Piece piece, GameObject ghost)
+        {
+            var center = GetDonutCenter(player);
+            var originalGhostPos = ghost.transform.position;
+            var originalGhostRot = ghost.transform.rotation;
+            var ghostPlant = ghost.GetComponent<Plant>();
+
+            int planted = 0, noSpace = 0;
+            bool outOfResources = false;
+
+            _inDonutPlace = true;
+            try
+            {
+                foreach (var p in GridGenerator.Donut(center.x, center.z,
+                             _innerRadius.Value, _outerRadius.Value, _spacing.Value))
+                {
+                    if (!player.HaveRequirements(piece, Player.RequirementMode.CanBuild))
+                    {
+                        outOfResources = true;
+                        break;
+                    }
+
+                    var y = SampleGroundY(p.X, p.Z, originalGhostPos.y);
+                    var pos = new Vector3(p.X, y, p.Z);
+
+                    // Per-point grow-space check uses the ghost's Plant component at this position.
+                    if (ghostPlant != null)
+                    {
+                        ghost.transform.position = pos;
+                        if (!HaveGrowSpaceCall(ghostPlant))
+                        {
+                            noSpace++;
+                            continue;
+                        }
+                    }
+
+                    try
+                    {
+                        player.PlacePiece(piece, pos, originalGhostRot, false);
+                        planted++;
+                    }
+                    catch (Exception e)
+                    {
+                        Log.LogWarning($"PlacePiece failed at ({p.X:0.##}, {p.Z:0.##}): {e.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                _inDonutPlace = false;
+                ghost.transform.position = originalGhostPos;
+                ghost.transform.rotation = originalGhostRot;
+            }
+
+            Log.LogInfo(
+                $"Donut plant: planted={planted} noSpace={noSpace}" +
+                (outOfResources ? " (out of resources)" : ""));
+            return planted > 0;
+        }
+
+        [HarmonyPatch(typeof(Player), nameof(Player.TryPlacePiece))]
+        private static class TryPlacePiecePatch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Player __instance, Piece piece, ref bool __result)
+            {
+                if (_inDonutPlace) return true;
+                if (Instance == null) return true;
+
+                var ghost = PlacementGhostRef(__instance);
+                if (ghost == null || ghost.GetComponent<Plant>() == null) return true;
+
+                __result = Instance.PlaceDonut(__instance, piece, ghost);
+                return false;
+            }
         }
 
         private void OnDestroy()
         {
             DestroyAllClones();
             _harmony?.UnpatchSelf();
+            if (Instance == this) Instance = null;
         }
     }
 }
