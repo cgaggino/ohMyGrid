@@ -1,117 +1,98 @@
 # OhMyGrid
 
-Valheim mod that lets you plant crops in **non-square grid patterns** — circular,
-donut (inner + outer radius), and other shapes — as an alternative to the
-default rectangular grid.
+Plant crops in **donut and other non-square patterns** in Valheim. Lay down a
+big onion ring, drop a smaller carrot donut concentric inside it, and stop
+fighting the rectangular grid. Also: mass-pick / mass-refuel with `Shift+E`.
 
-Status: **multi-plant + cursor/snap modes working**. While holding a plant on
-the cultivator, a donut of ghost previews shows around the player; left-click
-plants the whole donut, with per-point grow-space validation and inventory
-cost. F7 cycles the center between Player / Fixed (lock) / Cursor / CursorSnap
-(auto-aligns to the centroid of nearby plants for concentric placement). Mode
-changes show as a TopLeft HUD toast.
+![icon](icon.png)
 
-## Stack
+## Features
 
-- C# / .NET Framework `net472`
-- [BepInEx](https://github.com/BepInEx/BepInEx) 5.x + [HarmonyX](https://github.com/BepInEx/HarmonyX)
-- No Jötunn (yet) — pure BepInEx + Harmony
-
-## Building
-
-The build requires the Valheim **client** managed DLLs (`assembly_valheim.dll`
-and `UnityEngine.*.dll`). Those are NOT in this repo. Point MSBuild at your
-local Steam install:
-
-```bash
-# Linux (native Steam)
-export VALHEIM_INSTALL="$HOME/.steam/steam/steamapps/common/Valheim"
-
-# macOS (Steam under Crossover/Proton-ish)
-export VALHEIM_INSTALL="$HOME/Library/Application Support/Steam/steamapps/common/Valheim"
-
-# Windows (PowerShell)
-$env:VALHEIM_INSTALL = "C:\Program Files (x86)\Steam\steamapps\common\Valheim"
-```
-
-Then:
-
-```bash
-dotnet restore
-dotnet build -c Release
-```
-
-Output: `bin/Release/net472/OhMyGrid.dll`.
-
-Copy that DLL into `<Valheim>/BepInEx/plugins/` to test locally.
+- **Donut planting.** While holding the cultivator with a seed selected, a
+  ring of ghost previews shows around your chosen center. Left-click plants
+  the whole donut in one go.
+- **Per-point validity.** Each ghost turns red when its spot is invalid —
+  blocked by rocks/plants, out of reach, or on uncultivated soil. Green ones
+  are the only ones that get planted, charged, and counted.
+- **Cost + yield overlay** centered at the top of the screen: shows the
+  current plant, valid/total point count, total seed cost, and expected yield
+  — all live as you tune the radii.
+- **Four center modes**, cycled with `F7` (top-left HUD toast on change):
+  - **Player** — donut follows you.
+  - **Fixed** — pins the donut at your current spot. Walk away, donut stays.
+  - **Cursor** — donut follows where the cultivator ghost aims.
+  - **CursorSnap** — like Cursor, but the center auto-snaps to the centroid
+    of nearby existing plants. Perfect for concentric placement.
+- **Geometry toggle.** `F6` cycles `Off → Donut → Off`. In `Off`, the mod
+  stays out of the way and you place one plant per click like vanilla.
+- **Shift+E mass-interact** (hover-scoped, same-type only):
+  - Hover a **Pickable** → harvest every Pickable of the same item type in
+    range. Carrots don't sweep nearby strawberries.
+  - Hover a **Fireplace** → fuel every Fireplace in range.
+  - Hover a **Smelter / Charcoal Kiln** → feed every smelter in range.
+- **Persists across sessions.** Center mode, geometry mode, radii, hotkeys,
+  and toggles are all stored under `cgaggino.OhMyGrid.cfg`.
 
 ## Default hotkeys
 
-All hotkeys are configurable via BepInEx config (`[Hotkeys]` section).
+All hotkeys are configurable under `[Hotkeys]` in the config file.
 
 | Key | Action |
 |---|---|
-| `F7` | Cycle center mode: **Player → Fixed → Cursor → CursorSnap → Player** |
+| `F6` | Cycle geometry: `Off ↔ Donut` |
+| `F7` | Cycle center mode: `Player → Fixed → Cursor → CursorSnap → Player` |
 | `F8` | Dump every donut grid point to the BepInEx log |
 | `]` | Outer radius +1 spacing step |
 | `[` | Outer radius −1 spacing step |
 | `Shift+]` | Inner radius +1 spacing step |
 | `Shift+[` | Inner radius −1 spacing step |
-| Left-click | Plant the entire donut (when holding a plant on the cultivator) |
-| `Shift+E` | Mass-interact: pick up Pickables, fuel Fireplaces, feed Smelter switches within `MassInteract.Radius` (default 5m). Normal E unchanged. |
+| `Left-click` | Plant the entire donut (when holding a Plant ghost) |
+| `Shift+E` | Mass-interact with the hovered object's type in range |
 
-### Center modes (F7 cycles)
+Defaults: `InnerRadius=2m`, `OuterRadius=6m`, `Spacing=1m`, `AutoSnapRadius=12m`,
+`MassInteract.Radius=5m`. All editable in the cfg file (or via BepInEx
+ConfigurationManager if you have it installed).
 
-- **Player** — donut centered on you, moves as you walk.
-- **Fixed** — pins the center where it currently is. Walk away freely; donut stays.
-- **Cursor** — donut centered wherever the cultivator ghost is aiming.
-- **CursorSnap** — like Cursor, but the center auto-snaps to the *centroid* of
-  any existing Plants found within `AutoSnapRadius` (default 12 m). For
-  concentric placement: stand inside an existing donut, F7 to CursorSnap,
-  shrink outer radius (`[`) and plant the inner ring.
+## Concentric donut workflow
 
-Default grid: `InnerRadius=2m`, `OuterRadius=6m`, `Spacing=1m` (configurable
-under `[Grid]`).
+1. Stand inside an existing donut of one crop (or anywhere if it's the first).
+2. Tap `F7` until the HUD shows `Mode: CursorSnap`.
+3. Aim near the center — the donut snaps to the centroid of the existing
+   plants automatically.
+4. Bring `[` until the outer radius matches the inside of the previous donut.
+5. Swap seed type and left-click. The new ring lands concentric to the old one.
 
-## Roadmap
+## Building from source
 
-- [x] Project scaffold (BepInEx + Harmony Hello World)
-- [x] Position generator — concentric rings between inner/outer radius, isolated + log-tested
-- [x] Placement ghosts at generated positions
-- [x] Multi-plant on click with `HaveGrowSpace()` validation + inventory cost
-- [x] Config (inner/outer/spacing) + radius/lock hotkeys
-- [x] CenterMode (Player/Fixed/Cursor/CursorSnap) via F7 cycle + HUD toast
-- [x] Auto-snap: align donut center to centroid of nearby Plants in CursorSnap
-- [x] Center mode persists across sessions (Fixed is downgraded to Player on load)
-- [x] Max-placement-distance check: out-of-reach donut points tint red and are skipped on click
-- [x] Cost/yield overlay: `OhMyGrid · valid 18/20\nNeed: Seed-onion × 18\nYield: ~18 Onion` (only counts green/valid points)
-- [x] Shift+E mass interact: Pickables / Fireplaces / Smelter switches within MassInteract.Radius
-- [ ] **Known limitations / next slices:**
-  - [ ] Centroid snap is biased when the surrounding plant pattern is
-        asymmetric (partial / half donuts, irregular clusters). Better
-        approach: least-squares circle fit, or median-of-XZ, or detecting a
-        ring and using its geometric center.
-  - [ ] `Plant.Awake()` throws an NRE on each clone because the placement
-        ghost has no `ZNetView`. The exception is benign (visual still
-        renders, `HaveGrowSpace` works against the source ghost), but it
-        spams the log. Workaround idea: SetActive(false) the source briefly
-        so the clone instantiates inactive, attach a dummy ZNetView, then
-        activate; or strip the Plant component from the clone before
-        activation.
-  - [ ] Out-of-game preference persistence for F7 mode (currently resets to
-        Player each session).
-- [ ] Thunderstore package (manifest + icon + CI/CD)
+You need a local Valheim install with BepInEx (the build references
+`assembly_valheim.dll` and friends; they're not redistributable):
 
-## Notes
+```powershell
+$env:VALHEIM_INSTALL = "C:\Program Files (x86)\Steam\steamapps\common\Valheim"
+dotnet restore
+dotnet build -c Release
+```
 
-- Client-only mod (probably). No `ServerSync` needed unless we change that.
-- The build host is not the beelink — beelink-server has no Valheim install and
-  no `dotnet` SDK. Develop here (cloud-dev), build on a machine that has both.
-- Targets Valheim **0.221.x**. The relevant private API used:
-  `Player.m_placementGhost`, `Plant.HaveGrowSpace()` — both accessed via
-  `AccessTools` from HarmonyX. `Player.TryPlacePiece(Piece)` is the public
-  prefix target; `Player.PlacePiece(Piece, Vector3, Quaternion, bool)` is the
-  public per-point call.
+The output is `bin/Release/OhMyGrid.dll`. Drop it in your r2modman /
+Thunderstore Mod Manager profile under `BepInEx/plugins/`.
+
+## Known limitations
+
+- **Centroid snap is biased on asymmetric clusters.** If the existing plants
+  are a half-donut or irregular, the snapped center won't be the geometric
+  center. A least-squares circle fit is on the roadmap.
+- **Plant.Awake NRE per clone.** The placement ghost has no `ZNetView` and
+  `Plant.Awake` dereferences it unconditionally. The exception is caught by
+  Unity and the visual still renders correctly; `HaveGrowSpace` is validated
+  against the source ghost (not the clones), so behavior is correct, but the
+  log gets one NRE entry per donut clone created.
+
+## Compatibility
+
+- Targets Valheim **0.221.x**.
+- BepInEx 5.x via `denikson-BepInExPack_Valheim` (5.4.2333+).
+- Client-only — no `ServerSync`. Use freely on dedicated/multiplayer servers
+  without forcing other players to install.
 
 ## License
 

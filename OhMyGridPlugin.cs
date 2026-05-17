@@ -14,7 +14,7 @@ namespace OhMyGrid
     {
         public const string PluginGuid = "cgaggino.OhMyGrid";
         public const string PluginName = "OhMyGrid";
-        public const string PluginVersion = "0.1.0";
+        public const string PluginVersion = "1.0.0";
 
         private const float MinRadius = 0f;
         private const float MaxRadius = 32f;
@@ -24,6 +24,7 @@ namespace OhMyGrid
         private readonly Harmony _harmony = new Harmony(PluginGuid);
 
         public enum CenterMode { Player, Fixed, Cursor, CursorSnap }
+        public enum GeometryMode { Off, Donut }
 
         private ConfigEntry<float> _innerRadius;
         private ConfigEntry<float> _outerRadius;
@@ -31,6 +32,7 @@ namespace OhMyGrid
 
         private ConfigEntry<float> _autoSnapRadius;
         private ConfigEntry<CenterMode> _centerMode;
+        private ConfigEntry<GeometryMode> _geometryMode;
 
         private ConfigEntry<bool> _showCostOverlay;
 
@@ -39,10 +41,12 @@ namespace OhMyGrid
 
         private ConfigEntry<KeyboardShortcut> _dumpGridHotkey;
         private ConfigEntry<KeyboardShortcut> _cycleModeHotkey;
+        private ConfigEntry<KeyboardShortcut> _cycleGeometryHotkey;
         private ConfigEntry<KeyboardShortcut> _increaseOuterHotkey;
         private ConfigEntry<KeyboardShortcut> _decreaseOuterHotkey;
         private ConfigEntry<KeyboardShortcut> _increaseInnerHotkey;
         private ConfigEntry<KeyboardShortcut> _decreaseInnerHotkey;
+        private ConfigEntry<KeyboardShortcut> _massInteractHotkey;
 
         // Runtime state.
         private Vector3 _fixedCenter;
@@ -63,6 +67,7 @@ namespace OhMyGrid
         private int _validPointsCount;
         private int _totalPointsCount;
         private readonly StringBuilder _overlaySb = new StringBuilder(256);
+        private GUIStyle _overlayStyle;
 
         private static OhMyGridPlugin Instance;
         private static bool _inDonutPlace;
@@ -98,6 +103,9 @@ namespace OhMyGrid
                 "saved value is Fixed it resets to Player on load (no persisted fixed center).");
             if (_centerMode.Value == CenterMode.Fixed) _centerMode.Value = CenterMode.Player;
 
+            _geometryMode = Config.Bind("Geometry", "Mode", GeometryMode.Donut,
+                "Active geometry. Off = vanilla single-plant (mod disabled). Donut = circular ring(s). F6 cycles. Persists.");
+
             _showCostOverlay = Config.Bind("Overlay", "ShowCostOverlay", true,
                 "Show an on-screen overlay with valid-point count, required seeds and expected yield while a plant ghost is active.");
 
@@ -112,6 +120,9 @@ namespace OhMyGrid
             _cycleModeHotkey = Config.Bind("Hotkeys", "CycleCenterMode",
                 new KeyboardShortcut(KeyCode.F7),
                 "Cycle the donut center mode: Player → Fixed → Cursor → CursorSnap → Player.");
+            _cycleGeometryHotkey = Config.Bind("Hotkeys", "CycleGeometry",
+                new KeyboardShortcut(KeyCode.F6),
+                "Cycle the geometry: Off → Donut → Off.");
             _increaseOuterHotkey = Config.Bind("Hotkeys", "IncreaseOuter",
                 new KeyboardShortcut(KeyCode.RightBracket),
                 "Increase outer radius by one Spacing step.");
@@ -124,6 +135,9 @@ namespace OhMyGrid
             _decreaseInnerHotkey = Config.Bind("Hotkeys", "DecreaseInner",
                 new KeyboardShortcut(KeyCode.LeftBracket, KeyCode.LeftShift),
                 "Decrease inner radius by one Spacing step.");
+            _massInteractHotkey = Config.Bind("Hotkeys", "MassInteract",
+                new KeyboardShortcut(KeyCode.E, KeyCode.LeftShift),
+                "Mass-interact with all Pickable / Fireplace / Smelter switches in range.");
 
             Log.LogInfo($"{PluginName} v{PluginVersion} loaded — hello from the grid.");
 
@@ -141,6 +155,8 @@ namespace OhMyGrid
             if (_dumpGridHotkey.Value.IsDown()) DumpGrid();
 
             if (_cycleModeHotkey.Value.IsDown()) CycleMode();
+
+            if (_cycleGeometryHotkey.Value.IsDown()) CycleGeometry();
 
             // Adjust by one Spacing step so each press adds/removes exactly one ring.
             // Check modifier-bound (inner) before bare (outer), so Shift+] doesn't also trigger ].
@@ -160,6 +176,12 @@ namespace OhMyGrid
             {
                 if (_increaseOuterHotkey.Value.IsDown()) AdjustRadius(_outerRadius, +step);
                 else if (_decreaseOuterHotkey.Value.IsDown()) AdjustRadius(_outerRadius, -step);
+            }
+
+            if (_massInteractEnabled.Value && _massInteractHotkey.Value.IsDown())
+            {
+                var player = Player.m_localPlayer;
+                if (player != null) MassInteract(player);
             }
         }
 
@@ -205,6 +227,24 @@ namespace OhMyGrid
                 case CenterMode.Cursor: return CenterMode.CursorSnap;
                 case CenterMode.CursorSnap: return CenterMode.Player;
                 default: return CenterMode.Player;
+            }
+        }
+
+        private void CycleGeometry()
+        {
+            _geometryMode.Value = NextGeometry(_geometryMode.Value);
+            var msg = $"Geometry: {_geometryMode.Value}";
+            Log.LogInfo(msg);
+            ShowHudMessage(msg);
+        }
+
+        private static GeometryMode NextGeometry(GeometryMode g)
+        {
+            switch (g)
+            {
+                case GeometryMode.Off: return GeometryMode.Donut;
+                case GeometryMode.Donut: return GeometryMode.Off;
+                default: return GeometryMode.Donut;
             }
         }
 
@@ -307,6 +347,19 @@ namespace OhMyGrid
             var player = Player.m_localPlayer;
             if (player == null) { HideAllClones(); return; }
 
+            // Geometry Off = mod stays out of the way; vanilla single-plant.
+            if (_geometryMode.Value == GeometryMode.Off)
+            {
+                HideAllClones();
+                _lastSourceGhost = null;
+                _activeResources = null;
+                _activeGrownPrefabs = null;
+                _activePieceLabel = null;
+                _validPointsCount = 0;
+                _totalPointsCount = 0;
+                return;
+            }
+
             var ghost = PlacementGhostRef(player);
             // Only render clones when the active ghost is a Plant (cultivator + seed selected).
             var sourcePlant = ghost != null ? ghost.GetComponent<Plant>() : null;
@@ -373,6 +426,7 @@ namespace OhMyGrid
             var originalSourceRot = ghost.transform.rotation;
             var playerXZ = new Vector2(player.transform.position.x, player.transform.position.z);
             var maxPlaceDistSq = player.m_maxPlaceDistance * player.m_maxPlaceDistance;
+            var needsCultivated = sourcePlant.m_needCultivatedGround;
             var valid = 0;
 
             for (int i = 0; i < points.Count; i++)
@@ -390,11 +444,14 @@ namespace OhMyGrid
                 var dz = pt.Z - playerXZ.y;
                 var tooFar = dx * dx + dz * dz > maxPlaceDistSq;
 
+                // Cultivated ground required for most plants (carrots/turnips/onions/etc).
+                var notCultivated = needsCultivated && !IsCultivatedAt(pos);
+
                 // Move source ghost to test position for HaveGrowSpace.
                 ghost.transform.position = pos;
                 var noSpace = !HaveGrowSpaceCall(sourcePlant);
 
-                var invalid = tooFar || noSpace;
+                var invalid = tooFar || noSpace || notCultivated;
                 if (!invalid) valid++;
                 var clonePiece = _ghostClonePieces[i];
                 if (clonePiece != null) clonePiece.SetInvalidPlacementHeightlight(invalid);
@@ -444,8 +501,9 @@ namespace OhMyGrid
             var ghostPlant = ghost.GetComponent<Plant>();
             var playerXZ = new Vector2(player.transform.position.x, player.transform.position.z);
             var maxPlaceDistSq = player.m_maxPlaceDistance * player.m_maxPlaceDistance;
+            var needsCultivated = ghostPlant != null && ghostPlant.m_needCultivatedGround;
 
-            int planted = 0, noSpace = 0, tooFar = 0;
+            int planted = 0, noSpace = 0, tooFar = 0, notCultivated = 0;
             bool outOfResources = false;
 
             _inDonutPlace = true;
@@ -469,7 +527,14 @@ namespace OhMyGrid
                     }
 
                     var y = SampleGroundY(p.X, p.Z, originalGhostPos.y);
-                    var pos = new Vector3(p.X, y, p.Z);
+                    var pointPos = new Vector3(p.X, y, p.Z);
+
+                    if (needsCultivated && !IsCultivatedAt(pointPos))
+                    {
+                        notCultivated++;
+                        continue;
+                    }
+                    var pos = pointPos;
 
                     // Per-point grow-space check uses the ghost's Plant component at this position.
                     if (ghostPlant != null)
@@ -501,9 +566,15 @@ namespace OhMyGrid
             }
 
             Log.LogInfo(
-                $"Donut plant: planted={planted} noSpace={noSpace} tooFar={tooFar}" +
+                $"Donut plant: planted={planted} noSpace={noSpace} tooFar={tooFar} notCultivated={notCultivated}" +
                 (outOfResources ? " (out of resources)" : ""));
             return planted > 0;
+        }
+
+        private static bool IsCultivatedAt(Vector3 pos)
+        {
+            var hm = Heightmap.FindHeightmap(pos);
+            return hm != null && hm.IsCultivated(pos);
         }
 
         private void OnGUI()
@@ -517,6 +588,9 @@ namespace OhMyGrid
             sb.Append(_activePieceLabel ?? "Plant")
               .Append(" · valid ").Append(_validPointsCount)
               .Append('/').Append(_totalPointsCount);
+            sb.Append("\nDonut · inner ").Append(_innerRadius.Value.ToString("0.##"))
+              .Append("m · outer ").Append(_outerRadius.Value.ToString("0.##"))
+              .Append("m · spacing ").Append(_spacing.Value.ToString("0.##")).Append('m');
 
             if (_activeResources != null)
             {
@@ -556,8 +630,27 @@ namespace OhMyGrid
                 }
             }
 
-            var style = GUI.skin.box;
-            GUI.Box(new Rect(20, 130, 360, 110), sb.ToString(), style);
+            if (_overlayStyle == null)
+            {
+                _overlayStyle = new GUIStyle(GUI.skin.box)
+                {
+                    fontStyle = FontStyle.Bold,
+                    fontSize = 14,
+                    alignment = TextAnchor.MiddleCenter,
+                    wordWrap = false,
+                    padding = new RectOffset(12, 12, 8, 8),
+                };
+                _overlayStyle.normal.textColor = Color.white;
+            }
+
+            var text = sb.ToString();
+            var content = new GUIContent(text);
+            var size = _overlayStyle.CalcSize(content);
+            var width = size.x + 8f;
+            var height = _overlayStyle.CalcHeight(content, width);
+            var x = (Screen.width - width) * 0.5f;
+            var y = 10f;
+            GUI.Box(new Rect(x, y, width, height), text, _overlayStyle);
         }
 
         private static string LocalizeOrRaw(string key)
@@ -567,55 +660,87 @@ namespace OhMyGrid
             return loc != null ? loc.Localize(key) : key;
         }
 
+        private static string TryGetItemDisplayName(GameObject itemPrefab)
+        {
+            if (itemPrefab == null) return null;
+            var drop = itemPrefab.GetComponent<ItemDrop>();
+            var shared = drop != null ? drop.m_itemData?.m_shared : null;
+            if (shared == null || string.IsNullOrEmpty(shared.m_name)) return itemPrefab.name;
+            return LocalizeOrRaw(shared.m_name);
+        }
+
         private void MassInteract(Player player)
         {
+            // Scope is decided by the hovered object: mass-interact only affects
+            // things of the same kind as the one you're aiming at. Prevents the
+            // "I was filling a fire but it also harvested every plant nearby" bug.
+            var hover = player.GetHoverObject();
+            if (hover == null)
+            {
+                ShowHudMessage("Shift+E: no target");
+                return;
+            }
+
             var radius = _massInteractRadius.Value;
             var hits = Physics.OverlapSphere(player.transform.position, radius);
             var seen = new HashSet<int>();
-            int picked = 0, refueled = 0, smelted = 0;
+            int count = 0;
+            string label;
 
-            for (int i = 0; i < hits.Length; i++)
+            var hoverPickable = hover.GetComponentInParent<Pickable>();
+            if (hoverPickable != null)
             {
-                var col = hits[i];
-
-                var pickable = col.GetComponentInParent<Pickable>();
-                if (pickable != null && seen.Add(pickable.GetInstanceID()))
+                // Restrict to the SAME item type as the hovered pickable, so picking
+                // a carrot doesn't sweep nearby strawberries / mushrooms / etc.
+                var targetItem = hoverPickable.m_itemPrefab;
+                var typeName = TryGetItemDisplayName(targetItem);
+                label = "picked " + (typeName ?? "items");
+                for (int i = 0; i < hits.Length; i++)
                 {
-                    try { if (pickable.Interact(player, false, false)) picked++; }
-                    catch (Exception e) { Log.LogWarning($"MassInteract pickable failed: {e.Message}"); }
-                    continue;
+                    var p = hits[i].GetComponentInParent<Pickable>();
+                    if (p == null || !seen.Add(p.GetInstanceID())) continue;
+                    if (p.m_itemPrefab != targetItem) continue;
+                    try { if (p.Interact(player, false, false)) count++; }
+                    catch (Exception e) { Log.LogWarning($"MassInteract pickable: {e.Message}"); }
                 }
-
-                var fireplace = col.GetComponentInParent<Fireplace>();
-                if (fireplace != null && seen.Add(fireplace.GetInstanceID()))
+            }
+            else if (hover.GetComponentInParent<Fireplace>() != null)
+            {
+                label = "fueled";
+                for (int i = 0; i < hits.Length; i++)
                 {
-                    try { if (fireplace.Interact(player, false, false)) refueled++; }
-                    catch (Exception e) { Log.LogWarning($"MassInteract fireplace failed: {e.Message}"); }
-                    continue;
+                    var f = hits[i].GetComponentInParent<Fireplace>();
+                    if (f == null || !seen.Add(f.GetInstanceID())) continue;
+                    try { if (f.Interact(player, false, false)) count++; }
+                    catch (Exception e) { Log.LogWarning($"MassInteract fireplace: {e.Message}"); }
                 }
-
-                var smelter = col.GetComponentInParent<Smelter>();
-                if (smelter != null && seen.Add(smelter.GetInstanceID()))
+            }
+            else if (hover.GetComponentInParent<Smelter>() != null)
+            {
+                label = "smelters";
+                for (int i = 0; i < hits.Length; i++)
                 {
-                    var any = false;
+                    var s = hits[i].GetComponentInParent<Smelter>();
+                    if (s == null || !seen.Add(s.GetInstanceID())) continue;
                     try
                     {
-                        if (smelter.m_addOreSwitch != null
-                            && smelter.m_addOreSwitch.Interact(player, false, false)) any = true;
-                        if (smelter.m_addWoodSwitch != null
-                            && smelter.m_addWoodSwitch.Interact(player, false, false)) any = true;
+                        var any = false;
+                        if (s.m_addOreSwitch != null && s.m_addOreSwitch.Interact(player, false, false)) any = true;
+                        if (s.m_addWoodSwitch != null && s.m_addWoodSwitch.Interact(player, false, false)) any = true;
+                        if (any) count++;
                     }
-                    catch (Exception e) { Log.LogWarning($"MassInteract smelter failed: {e.Message}"); }
-                    if (any) smelted++;
+                    catch (Exception e) { Log.LogWarning($"MassInteract smelter: {e.Message}"); }
                 }
             }
-
-            if (picked > 0 || refueled > 0 || smelted > 0)
+            else
             {
-                var msg = $"Shift+E: picked={picked} fueled={refueled} smelter={smelted}";
-                Log.LogInfo(msg);
-                ShowHudMessage(msg);
+                ShowHudMessage("Shift+E: target not supported");
+                return;
             }
+
+            var msg = $"Shift+E: {label} × {count}";
+            Log.LogInfo(msg);
+            ShowHudMessage(msg);
         }
 
         [HarmonyPatch(typeof(Player), nameof(Player.TryPlacePiece))]
@@ -626,6 +751,7 @@ namespace OhMyGrid
             {
                 if (_inDonutPlace) return true;
                 if (Instance == null) return true;
+                if (Instance._geometryMode.Value == GeometryMode.Off) return true;
 
                 var ghost = PlacementGhostRef(__instance);
                 if (ghost == null || ghost.GetComponent<Plant>() == null) return true;

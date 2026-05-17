@@ -1,9 +1,9 @@
 {
   "name": "OhMyGrid",
-  "version_number": "0.1.0",
+  "version_number": "1.0.0",
   "website_url": "https://github.com/cgaggino/ohMyGrid",
-  "description": "Plant crops in circular, donut, and other non-square grid patterns.",
+  "description": "Plant crops in donut and other non-square patterns. Cycle center modes, auto-snap to existing plants for concentric placement, see cost and yield live, and mass-pick/refuel with Shift+E.",
   "dependencies": [
-    "denikson-BepInExPack_Valheim-5.4.2202"
+    "denikson-BepInExPack_Valheim-5.4.2333"
   ]
 }
