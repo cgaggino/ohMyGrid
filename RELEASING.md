@@ -58,8 +58,10 @@ tcli publish --file dist/OhMyGrid-$ver.zip --token $env:TCLI_AUTH_TOKEN
 ```
 
 `thunderstore.toml` already pins the namespace, name, version, target
-community (`valheim`), and category (`mods`). If you change the target,
-update the toml *before* publishing.
+community (`valheim`), and categories (`mods`, `ai-generated`). If you change
+the target, update the toml *before* publishing. The `ai-generated` tag must
+stay — every OhMyGrid release ships with it since the bulk of the code is
+written through Claude Code, and that's the team-wide disclosure rule.
 
 Successful upload prints a `Successfully published suspicious_geet-OhMyGrid`
 line plus the download URL. The release becomes visible on

@@ -22,4 +22,6 @@ outdir = "./dist"
 repository = "https://thunderstore.io"
 communities = [ "valheim", ]
 [publish.categories]
-valheim = [ "mods", ]
+# "ai-generated" is required by team policy for every release; this mod is
+# largely written through Claude Code so the disclosure tag stays on.
+valheim = [ "mods", "ai-generated", ]
