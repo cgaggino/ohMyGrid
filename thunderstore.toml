@@ -1,0 +1,25 @@
+[config]
+schemaVersion = "0.0.1"
+
+[package]
+namespace = "suspicious_geet"
+name = "OhMyGrid"
+versionNumber = "1.0.0"
+description = "Plant crops in donut and other non-square patterns. Cycle center modes, auto-snap to existing plants for concentric placement, see cost and yield live, and mass-pick/refuel with Shift+E."
+websiteUrl = "https://github.com/cgaggino/ohMyGrid"
+containsNsfwContent = false
+[package.dependencies]
+denikson-BepInExPack_Valheim = "5.4.2333"
+
+
+[build]
+icon = "./icon.png"
+readme = "./README.md"
+outdir = "./dist"
+
+
+[publish]
+repository = "https://thunderstore.io"
+communities = [ "valheim", ]
+[publish.categories]
+valheim = [ "mods", ]
