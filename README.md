@@ -6,6 +6,11 @@ fighting the rectangular grid. Also: mass-pick / mass-refuel with `Shift+E`.
 
 ![icon](icon.png)
 
+**Install:** [Thunderstore page](https://thunderstore.io/c/valheim/p/suspicious_geet/OhMyGrid/)
+(direct download
+[OhMyGrid-1.0.0.zip](https://thunderstore.io/package/download/suspicious_geet/OhMyGrid/1.0.0/)).
+Use r2modman or Thunderstore Mod Manager to drop it into a Valheim profile.
+
 ## Features
 
 - **Donut planting.** While holding the cultivator with a seed selected, a
@@ -86,6 +91,25 @@ Thunderstore Mod Manager profile under `BepInEx/plugins/`.
   Unity and the visual still renders correctly; `HaveGrowSpace` is validated
   against the source ghost (not the clones), so behavior is correct, but the
   log gets one NRE entry per donut clone created.
+- **Fixed-mode center doesn't persist across sessions.** The center *mode*
+  saves and reloads as `Player` on the next launch (no anchor to restore).
+  Other modes restore exactly as you left them.
+
+## Planned (v1.1+)
+
+- More geometries on the `F6` cycle: square grid, hex grid, spiral, and a
+  user-drawn polygon.
+- Least-squares circle fit for `CursorSnap` so half/quarter donuts also
+  resolve to the geometric center.
+- Workaround for the `Plant.Awake` NRE (instantiate inactive → attach a
+  dummy `ZNetView` → activate, or strip the `Plant` component before the
+  first frame).
+- `Shift+E` support for more interactables (Beehive, Cauldron, Workbench
+  repair).
+- A toggle to **mass-fill** a single Smelter / Fireplace with one press,
+  not just one tick per press.
+- Optional ground ring rendered at the AutoSnap centroid so the snap target
+  is visually obvious before you click.
 
 ## Compatibility
 
@@ -93,6 +117,11 @@ Thunderstore Mod Manager profile under `BepInEx/plugins/`.
 - BepInEx 5.x via `denikson-BepInExPack_Valheim` (5.4.2333+).
 - Client-only — no `ServerSync`. Use freely on dedicated/multiplayer servers
   without forcing other players to install.
+
+## Contributing / releasing
+
+PRs welcome. The dev release workflow (version bump, zip build, Thunderstore
+upload via `tcli`) is documented in [`RELEASING.md`](RELEASING.md).
 
 ## License
 
