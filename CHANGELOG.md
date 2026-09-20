@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.2 — 2026-09-20
+
+Runtime fixes found while play-testing 1.0.1 on Valheim 1.0.15.
+
+- **Seeds are now charged for every plant.** Since 1.0, vanilla charges one piece
+  *after* `TryPlacePiece` returns, so a donut of N plants cost 1 seed. The mod now
+  pays for N-1 itself and leaves the last one to vanilla (stamina/skill intact),
+  checks stock before each plant, and never plants what you can't pay for.
+- **Ghost previews render again.** Ghost clones are created inactive and stripped
+  of `Plant`/`ZNetView` before activation. Previously `Plant.Awake` ran on the clone
+  and either NRE'd every frame (after the first placement recreated the ghost) or,
+  worse, gave the clone a real ZDO — a phantom plant in the world simulation.
+  If cloning ever fails, the preview turns itself off for that ghost with one
+  error line instead of one exception per frame.
+- **Overlay shows what you can afford**: `can afford N`, `Need: item × N (have M)`,
+  and ghosts beyond your stock are tinted red.
+- **Shift+E on a smelter/kiln/fire feeds only the station you aim at**, until it is
+  full or you run out — no more radius sweep feeding the furnace when you aim at
+  the kiln. Aiming at a specific slot (ore vs fuel) feeds just that slot. Fires use
+  the refill path (no accidental toggle-off).
+- Log lines for seed cost (stock before/after, paid here/by vanilla), Shift+E
+  target + amounts, geometry cycling, and ghost clone creation — so a run can be
+  verified from `LogOutput.log`.
+
 ## 1.0.1 — 2026-09-20
 
 Compatibility rebuild for **Valheim 1.0** (tested against `l-1.0.12`). No functional changes.

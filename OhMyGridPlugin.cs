@@ -14,7 +14,7 @@ namespace OhMyGrid
     {
         public const string PluginGuid = "cgaggino.OhMyGrid";
         public const string PluginName = "OhMyGrid";
-        public const string PluginVersion = "1.0.1";
+        public const string PluginVersion = "1.0.2";
 
         private const float MinRadius = 0f;
         private const float MaxRadius = 32f;
@@ -66,6 +66,11 @@ namespace OhMyGrid
         private string _activePieceLabel;
         private int _validPointsCount;
         private int _totalPointsCount;
+        // How many of the valid points the player can actually pay for (int.MaxValue = free build).
+        private int _affordableCount = int.MaxValue;
+        // Set when cloning the current source ghost failed; preview stays off (and quiet)
+        // until Valheim hands us a different ghost, instead of throwing once per frame.
+        private bool _cloneFailedForGhost;
         private readonly StringBuilder _overlaySb = new StringBuilder(256);
         private GUIStyle _overlayStyle;
 
@@ -232,6 +237,7 @@ namespace OhMyGrid
 
         private void CycleGeometry()
         {
+            Log.LogInfo($"Geometry: {NextGeometry(_geometryMode.Value)}");
             _geometryMode.Value = NextGeometry(_geometryMode.Value);
             var msg = $"Geometry: {_geometryMode.Value}";
             Log.LogInfo(msg);
@@ -380,6 +386,7 @@ namespace OhMyGrid
             {
                 DestroyAllClones();
                 _lastSourceGhost = ghost;
+                _cloneFailedForGhost = false;
 
                 // Cache the resource/yield info for the overlay (slice F).
                 var sourcePiece = ghost.GetComponent<Piece>();
@@ -399,23 +406,33 @@ namespace OhMyGrid
             }
             _totalPointsCount = points.Count;
 
-            while (_ghostClones.Count < points.Count)
+            if (_cloneFailedForGhost)
             {
-                // NOTE: Plant.Awake() throws NRE on the clone because the placement
-                // ghost has no ZNetView, but Awake unconditionally calls m_nview.GetZDO().
-                // The exception is benign — the visual still renders, the serialized
-                // m_growRadius/m_spaceMask are intact, and Piece.SetInvalidPlacementHeightlight
-                // works fine. We disable Plant on the clone to stop further per-frame
-                // Plant logic from messing with the visual.
-                var clone = UnityEngine.Object.Instantiate(ghost);
-                foreach (var c in clone.GetComponentsInChildren<Collider>())
+                HideAllClones();
+                _validPointsCount = 0;
+                return;
+            }
+            if (_ghostClones.Count < points.Count)
+            {
+                var before = _ghostClones.Count;
+                try
                 {
-                    c.enabled = false;
+                    while (_ghostClones.Count < points.Count)
+                    {
+                        var clone = CreateGhostClone(ghost);
+                        _ghostClones.Add(clone);
+                        _ghostClonePieces.Add(clone.GetComponent<Piece>());
+                    }
+                    Log.LogDebug($"Ghost clones: {before} → {_ghostClones.Count} for '{ghost.name}' (active={ghost.activeSelf})");
                 }
-                var clonePlant = clone.GetComponent<Plant>();
-                if (clonePlant != null) clonePlant.enabled = false;
-                _ghostClones.Add(clone);
-                _ghostClonePieces.Add(clone.GetComponent<Piece>());
+                catch (Exception e)
+                {
+                    _cloneFailedForGhost = true;
+                    Log.LogError($"Ghost preview disabled for '{ghost.name}': cloning threw {e.GetType().Name}: {e.Message}");
+                    HideAllClones();
+                    _validPointsCount = 0;
+                    return;
+                }
             }
 
             // Validity check moves the SOURCE ghost (whose Plant is properly set up by
@@ -427,6 +444,8 @@ namespace OhMyGrid
             var playerXZ = new Vector2(player.transform.position.x, player.transform.position.z);
             var maxPlaceDistSq = player.m_maxPlaceDistance * player.m_maxPlaceDistance;
             var needsCultivated = sourcePlant.m_needCultivatedGround;
+            var sourcePieceForCost = ghost.GetComponent<Piece>();
+            var affordable = CountAffordable(player, sourcePieceForCost);
             var valid = 0;
 
             for (int i = 0; i < points.Count; i++)
@@ -452,18 +471,112 @@ namespace OhMyGrid
                 var noSpace = !HaveGrowSpaceCall(sourcePlant);
 
                 var invalid = tooFar || noSpace || notCultivated;
+                // Points the inventory can't pay for are shown red too: the donut only
+                // plants what you can afford (in ring order), so this is what will happen.
+                var unaffordable = !invalid && valid >= affordable;
                 if (!invalid) valid++;
                 var clonePiece = _ghostClonePieces[i];
-                if (clonePiece != null) clonePiece.SetInvalidPlacementHeightlight(invalid);
+                if (clonePiece != null) clonePiece.SetInvalidPlacementHeightlight(invalid || unaffordable);
             }
 
             ghost.transform.position = originalSourcePos;
             ghost.transform.rotation = originalSourceRot;
             _validPointsCount = valid;
+            _affordableCount = affordable;
             for (int i = points.Count; i < _ghostClones.Count; i++)
             {
                 if (_ghostClones[i].activeSelf) _ghostClones[i].SetActive(false);
             }
+        }
+
+        /// <summary>
+        /// Visual-only copy of the placement ghost. The ghost has no ZNetView (Valheim
+        /// strips it via ZNetView.m_forceDisableInit), so if Plant.Awake ran on a clone it
+        /// would NRE on m_nview — and since Valheim 1.0 Plant derives from SlowUpdate,
+        /// whose Awake registers the object with the world's SlowUpdater *before* that NRE,
+        /// leaving a half-built "plant" in the simulation (1.0.1 bugs: no ghosts rendered +
+        /// Plant.SUpdate NREs). So: instantiate INACTIVE (no Awake), remove Plant and any
+        /// stray ZNetView, then activate. Piece stays (Awake is harmless without a
+        /// ZNetView) because SetInvalidPlacementHeightlight is what tints the clone.
+        /// </summary>
+        private static GameObject CreateGhostClone(GameObject ghost)
+        {
+            var wasActive = ghost.activeSelf;
+            ghost.SetActive(false);
+            GameObject clone;
+            try
+            {
+                clone = UnityEngine.Object.Instantiate(ghost);
+            }
+            finally
+            {
+                ghost.SetActive(wasActive);
+            }
+            clone.name = ghost.name + " (OhMyGrid ghost)";
+            foreach (var plant in clone.GetComponentsInChildren<Plant>(true))
+            {
+                UnityEngine.Object.DestroyImmediate(plant);
+            }
+            foreach (var nview in clone.GetComponentsInChildren<ZNetView>(true))
+            {
+                UnityEngine.Object.DestroyImmediate(nview);
+            }
+            foreach (var c in clone.GetComponentsInChildren<Collider>(true))
+            {
+                c.enabled = false;
+            }
+            clone.SetActive(true);
+            return clone;
+        }
+
+        /// <summary>
+        /// True when placement is free for this player: no-cost cheat or the world's
+        /// free-build global key — the same two exemptions vanilla applies.
+        /// </summary>
+        private static bool IsFreeBuild(Player player, Piece piece)
+        {
+            if (player.NoCostCheat()) return true;
+            var zs = ZoneSystem.instance;
+            return zs != null && piece != null && zs.GetGlobalKey(piece.FreeBuildKey());
+        }
+
+        /// <summary>
+        /// How many copies of <paramref name="piece"/> the player's inventory can pay for
+        /// (int.MaxValue when building is free or the piece costs nothing).
+        /// </summary>
+        private static int CountAffordable(Player player, Piece piece)
+        {
+            if (piece == null || IsFreeBuild(player, piece)) return int.MaxValue;
+            var inv = player.GetInventory();
+            if (inv == null) return 0;
+            var affordable = int.MaxValue;
+            var resources = piece.m_resources;
+            if (resources == null) return int.MaxValue;
+            for (int i = 0; i < resources.Length; i++)
+            {
+                var req = resources[i];
+                if (req == null || req.m_resItem == null || req.m_amount <= 0) continue;
+                var shared = req.m_resItem.m_itemData?.m_shared;
+                if (shared == null) continue;
+                var have = inv.CountItems(shared.m_name);
+                affordable = Mathf.Min(affordable, have / req.m_amount);
+            }
+            return affordable;
+        }
+
+        /// <summary>"item×perPlant have N, ..." for the log line — never affects gameplay.</summary>
+        private static string DescribeStock(Player player, Piece piece)
+        {
+            var inv = player.GetInventory();
+            if (inv == null || piece == null || piece.m_resources == null) return "?";
+            var parts = new List<string>();
+            foreach (var req in piece.m_resources)
+            {
+                var shared = req?.m_resItem?.m_itemData?.m_shared;
+                if (shared == null || req.m_amount <= 0) continue;
+                parts.Add($"{shared.m_name}×{req.m_amount} have {inv.CountItems(shared.m_name)}");
+            }
+            return string.Join(", ", parts);
         }
 
         private static float SampleGroundY(float x, float z, float fallback)
@@ -505,6 +618,15 @@ namespace OhMyGrid
 
             int planted = 0, noSpace = 0, tooFar = 0, notCultivated = 0;
             bool outOfResources = false;
+            // Cost accounting. Vanilla's UpdatePlacement charges exactly ONE piece (and the
+            // build stamina) when TryPlacePiece returns true, so here we charge every plant
+            // except the last one and let vanilla pay for that (keeps stamina/skill/recent-
+            // piece side effects intact). Before each placement we require enough stock for
+            // the still-unpaid previous plant PLUS the new one, so the tally is exact.
+            var freeBuild = IsFreeBuild(player, piece);
+            var unpaid = 0;
+            var affordableBefore = CountAffordable(player, piece);
+            var stockBefore = DescribeStock(player, piece);
 
             _inDonutPlace = true;
             try
@@ -512,7 +634,7 @@ namespace OhMyGrid
                 foreach (var p in GridGenerator.Donut(center.x, center.z,
                              _innerRadius.Value, _outerRadius.Value, _spacing.Value))
                 {
-                    if (!player.HaveRequirements(piece, Player.RequirementMode.CanBuild))
+                    if (!freeBuild && CountAffordable(player, piece) < unpaid + 1)
                     {
                         outOfResources = true;
                         break;
@@ -551,6 +673,13 @@ namespace OhMyGrid
                     {
                         player.PlacePiece(piece, pos, originalGhostRot, false);
                         planted++;
+                        if (!freeBuild)
+                        {
+                            // Pay for the previous plant now; this one stays unpaid until
+                            // either the next iteration or vanilla's post-TryPlacePiece charge.
+                            if (unpaid > 0) player.ConsumeResources(piece.m_resources, 0);
+                            unpaid = 1;
+                        }
                     }
                     catch (Exception e)
                     {
@@ -567,6 +696,10 @@ namespace OhMyGrid
 
             Log.LogInfo(
                 $"Donut plant: planted={planted} noSpace={noSpace} tooFar={tooFar} notCultivated={notCultivated}" +
+                $" | cost: affordableBefore={(affordableBefore == int.MaxValue ? "∞" : affordableBefore.ToString())}" +
+                $" stockBefore=[{stockBefore}] stockAfterMod=[{DescribeStock(player, piece)}]" +
+                $" paidHere={(freeBuild ? 0 : Mathf.Max(planted - 1, 0))} paidByVanilla={(planted > 0 && !freeBuild ? 1 : 0)}" +
+                (freeBuild ? " (free build)" : "") +
                 (outOfResources ? " (out of resources)" : ""));
             return planted > 0;
         }
@@ -585,9 +718,14 @@ namespace OhMyGrid
 
             var sb = _overlaySb;
             sb.Length = 0;
+            var willPlant = Mathf.Min(_validPointsCount, _affordableCount);
             sb.Append(_activePieceLabel ?? "Plant")
               .Append(" · valid ").Append(_validPointsCount)
               .Append('/').Append(_totalPointsCount);
+            if (willPlant < _validPointsCount)
+            {
+                sb.Append(" · can afford ").Append(willPlant);
+            }
             sb.Append("\nDonut · inner ").Append(_innerRadius.Value.ToString("0.##"))
               .Append("m · outer ").Append(_outerRadius.Value.ToString("0.##"))
               .Append("m · spacing ").Append(_spacing.Value.ToString("0.##")).Append('m');
@@ -604,7 +742,12 @@ namespace OhMyGrid
                       .Append("Need: ")
                       .Append(LocalizeOrRaw(shared.m_name))
                       .Append(" × ")
-                      .Append(req.m_amount * _validPointsCount);
+                      .Append(req.m_amount * willPlant);
+                    var inv = Player.m_localPlayer != null ? Player.m_localPlayer.GetInventory() : null;
+                    if (inv != null)
+                    {
+                        sb.Append(" (have ").Append(inv.CountItems(shared.m_name)).Append(')');
+                    }
                 }
             }
 
@@ -623,7 +766,7 @@ namespace OhMyGrid
                     {
                         sb.Append('\n')
                           .Append("Yield: ~")
-                          .Append(pickable.m_amount * _validPointsCount)
+                          .Append(pickable.m_amount * willPlant)
                           .Append(' ')
                           .Append(LocalizeOrRaw(shared.m_name));
                     }
@@ -695,6 +838,7 @@ namespace OhMyGrid
                 var targetItem = hoverPickable.m_itemPrefab;
                 var typeName = TryGetItemDisplayName(targetItem);
                 label = "picked " + (typeName ?? "items");
+                Log.LogInfo($"Shift+E target: pickable '{(targetItem != null ? targetItem.name : "?")}' radius={radius}");
                 for (int i = 0; i < hits.Length; i++)
                 {
                     var p = hits[i].GetComponentInParent<Pickable>();
@@ -704,33 +848,37 @@ namespace OhMyGrid
                     catch (Exception e) { Log.LogWarning($"MassInteract pickable: {e.Message}"); }
                 }
             }
-            else if (hover.GetComponentInParent<Fireplace>() != null)
+            else if (hover.GetComponentInParent<Fireplace>() is Fireplace fire)
             {
-                label = "fueled";
-                for (int i = 0; i < hits.Length; i++)
-                {
-                    var f = hits[i].GetComponentInParent<Fireplace>();
-                    if (f == null || !seen.Add(f.GetInstanceID())) continue;
-                    try { if (f.Interact(player, false, false)) count++; }
-                    catch (Exception e) { Log.LogWarning($"MassInteract fireplace: {e.Message}"); }
-                }
+                // Stations are "mass" in the other axis: ONLY the one you aim at, but
+                // fed repeatedly until it's full or you run out. (1.0.1 swept every
+                // station in the radius, so aiming at the kiln fed the furnace.)
+                // alt=true → refill path; plain interact toggles fires that can turn off.
+                label = "fueled " + LocalizeOrRaw(fire.m_name);
+                count = FeedUntilRefused(() => fire.Interact(player, false, true), "fireplace");
+                Log.LogInfo($"Shift+E target: fireplace '{fire.m_name}' fuel={fire.m_fuelItem?.m_itemData?.m_shared?.m_name} added={count}");
             }
-            else if (hover.GetComponentInParent<Smelter>() != null)
+            else if (hover.GetComponentInParent<Smelter>() is Smelter smelter)
             {
-                label = "smelters";
-                for (int i = 0; i < hits.Length; i++)
+                label = "fed " + LocalizeOrRaw(smelter.m_name);
+                // Aiming at a specific switch (the ore slot vs the fuel slot) feeds just
+                // that slot; aiming at the body feeds both.
+                var hoveredSwitch = hover.GetComponentInParent<Switch>();
+                var oreOnly = hoveredSwitch != null && hoveredSwitch == smelter.m_addOreSwitch;
+                var fuelOnly = hoveredSwitch != null && hoveredSwitch == smelter.m_addWoodSwitch;
+                int ore = 0, fuel = 0;
+                if (smelter.m_addOreSwitch != null && !fuelOnly)
                 {
-                    var s = hits[i].GetComponentInParent<Smelter>();
-                    if (s == null || !seen.Add(s.GetInstanceID())) continue;
-                    try
-                    {
-                        var any = false;
-                        if (s.m_addOreSwitch != null && s.m_addOreSwitch.Interact(player, false, false)) any = true;
-                        if (s.m_addWoodSwitch != null && s.m_addWoodSwitch.Interact(player, false, false)) any = true;
-                        if (any) count++;
-                    }
-                    catch (Exception e) { Log.LogWarning($"MassInteract smelter: {e.Message}"); }
+                    var sw = smelter.m_addOreSwitch;
+                    ore = FeedUntilRefused(() => sw.Interact(player, false, false), "smelter ore");
                 }
+                if (smelter.m_addWoodSwitch != null && !oreOnly)
+                {
+                    var sw = smelter.m_addWoodSwitch;
+                    fuel = FeedUntilRefused(() => sw.Interact(player, false, false), "smelter fuel");
+                }
+                count = ore + fuel;
+                Log.LogInfo($"Shift+E target: smelter '{smelter.m_name}' slot={(oreOnly ? "ore" : fuelOnly ? "fuel" : "both")} oreAdded={ore} fuelAdded={fuel} fuel={smelter.m_fuelItem?.m_itemData?.m_shared?.m_name}");
             }
             else
             {
@@ -741,6 +889,23 @@ namespace OhMyGrid
             var msg = $"Shift+E: {label} × {count}";
             Log.LogInfo(msg);
             ShowHudMessage(msg);
+        }
+
+        /// <summary>Calls <paramref name="feedOnce"/> until it returns false (full / out of
+        /// stock / wrong item) or a hard cap, returning how many times it succeeded.</summary>
+        private static int FeedUntilRefused(Func<bool> feedOnce, string what)
+        {
+            const int cap = 64;
+            var n = 0;
+            try
+            {
+                while (n < cap && feedOnce()) n++;
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning($"MassInteract {what}: {e.Message}");
+            }
+            return n;
         }
 
         [HarmonyPatch(typeof(Player), nameof(Player.TryPlacePiece))]

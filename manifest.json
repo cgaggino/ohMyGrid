@@ -1,6 +1,6 @@
 {
   "name": "OhMyGrid",
-  "version_number": "1.0.1",
+  "version_number": "1.0.2",
   "website_url": "https://github.com/cgaggino/ohMyGrid",
   "description": "Plant crops in donut and other non-square patterns. Cycle center modes, auto-snap to existing plants for concentric placement, see cost and yield live, and mass-pick/refuel with Shift+E.",
   "dependencies": [

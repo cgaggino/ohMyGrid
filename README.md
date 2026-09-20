@@ -8,7 +8,7 @@ fighting the rectangular grid. Also: mass-pick / mass-refuel with `Shift+E`.
 
 **Install:** [Thunderstore page](https://thunderstore.io/c/valheim/p/suspicious_geet/OhMyGrid/)
 (direct download
-[OhMyGrid-1.0.0.zip](https://thunderstore.io/package/download/suspicious_geet/OhMyGrid/1.0.0/)).
+[OhMyGrid-1.0.2.zip](https://thunderstore.io/package/download/suspicious_geet/OhMyGrid/1.0.2/)).
 Use r2modman or Thunderstore Mod Manager to drop it into a Valheim profile.
 
 ## Features
