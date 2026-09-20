@@ -68,6 +68,27 @@ line plus the download URL. The release becomes visible on
 [the package page](https://thunderstore.io/c/valheim/p/suspicious_geet/OhMyGrid/)
 within seconds.
 
+## Building on beelink-server (Linux, no Valheim client)
+
+The dedicated server's `valheim_server_Data/Managed/` ships the same
+`assembly_valheim.dll` + Unity modules the mod references, and lloesche's
+image keeps a BepInEx core at `/opt/valheim/bepinex/BepInEx/core`. Stage them
+into a fake install layout and build in a dotnet container (no dotnet on host):
+
+```bash
+ST=/tmp/valheim-stage; mkdir -p $ST/valheim_Data/Managed $ST/BepInEx/core
+for d in assembly_valheim assembly_guiutils UnityEngine UnityEngine.CoreModule UnityEngine.PhysicsModule          UnityEngine.InputLegacyModule UnityEngine.IMGUIModule UnityEngine.TextRenderingModule; do
+  docker cp valheim:/opt/valheim/server/valheim_server_Data/Managed/$d.dll $ST/valheim_Data/Managed/; done
+docker cp valheim:/opt/valheim/bepinex/BepInEx/core/. $ST/BepInEx/core/
+docker run --rm -v "$PWD":/src -v $ST:/valheim -w /src mcr.microsoft.com/dotnet/sdk:8.0   dotnet build -c Release -p:ValheimInstall=/valheim
+```
+
+Package with python (`zipfile`) since `zip` isn't installed, then publish with
+`bin/publish` — it reads the token from `secret-provider` (`thunderstore_token`,
+stored once with `bin/set-thunderstore-token`) and runs `tcli` in the same
+container. Verify signatures after a Valheim update with
+`ilspycmd -il` on the built DLL (see 1.0.1 in the changelog for why).
+
 ## Git hygiene
 
 ```powershell

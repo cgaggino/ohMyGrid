@@ -14,7 +14,7 @@ namespace OhMyGrid
     {
         public const string PluginGuid = "cgaggino.OhMyGrid";
         public const string PluginName = "OhMyGrid";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.1";
 
         private const float MinRadius = 0f;
         private const float MaxRadius = 32f;

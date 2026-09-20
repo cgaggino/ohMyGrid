@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1 — 2026-09-20
+
+Compatibility rebuild for **Valheim 1.0** (tested against `l-1.0.12`). No functional changes.
+
+- Rebuilt against the 1.0 assemblies. 1.0 added optional parameters to
+  `Player.PlacePiece` and `MessageHud.ShowMessage`, so the 1.0.0 DLL threw
+  `MissingMethodException` when planting a donut or showing any HUD toast.
+- Dependency bumped to `denikson-BepInExPack_Valheim-5.4.2350`.
+
 ## 1.0.0 — 2026-05-17
 
 Initial Thunderstore release.

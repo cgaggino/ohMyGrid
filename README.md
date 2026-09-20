@@ -113,8 +113,8 @@ Thunderstore Mod Manager profile under `BepInEx/plugins/`.
 
 ## Compatibility
 
-- Targets Valheim **0.221.x**.
-- BepInEx 5.x via `denikson-BepInExPack_Valheim` (5.4.2333+).
+- Targets Valheim **1.0** (1.0.1+; 1.0.0 was built for 0.221.x and does not work on 1.0).
+- BepInEx 5.x via `denikson-BepInExPack_Valheim` (5.4.2350+).
 - Client-only — no `ServerSync`. Use freely on dedicated/multiplayer servers
   without forcing other players to install.
 
