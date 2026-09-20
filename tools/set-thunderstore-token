@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Store the Thunderstore service-account token (team suspicious_geet) in the
+# host-bound secret store (secret-provider) so tools/publish can use it without
+# the value ever touching a chat transcript, argv or the repo.
+# Usage: tools/set-thunderstore-token   (prompts; input is not echoed)
+set -euo pipefail
+SP="${SECRET_PROVIDER:-$HOME/Developer/secret-provider/bin/secret-provider}"
+[ -t 0 ] || { echo "needs an interactive terminal (ssh / tmux window) — the Claude Code '!' prefix has no stdin" >&2; exit 1; }
+read -rs -p "Thunderstore token (tss_...): " TOKEN; echo
+[ -n "$TOKEN" ] || { echo "empty token, aborting" >&2; exit 1; }
+# Validate against the API before storing (service-account tokens resolve to a user).
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+  https://thunderstore.io/api/experimental/current-user/)
+if [ "$code" != "200" ]; then
+  echo "token rejected by thunderstore.io (HTTP $code), not stored" >&2; exit 1
+fi
+printf '%s' "$TOKEN" | "$SP" set thunderstore_token
+echo "stored as 'thunderstore_token' (validated OK)"

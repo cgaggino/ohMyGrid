@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Publish dist/OhMyGrid-<version>.zip to Thunderstore with tcli (runs in a
+# dotnet SDK container — no dotnet on the host). Token comes from
+# secret-provider ('thunderstore_token'); it is passed to the container via
+# env, never via host argv. Build + zip first (see RELEASING.md).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+VER=$(sed -n 's/^versionNumber = "\(.*\)"/\1/p' thunderstore.toml)
+ZIP="dist/OhMyGrid-$VER.zip"
+[ -f "$ZIP" ] || { echo "missing $ZIP — build and package first" >&2; exit 1; }
+SP="${SECRET_PROVIDER:-$HOME/Developer/secret-provider/bin/secret-provider}"
+TCLI_AUTH_TOKEN=$("$SP" pipe thunderstore_token)
+export TCLI_AUTH_TOKEN
+docker run --rm -e TCLI_AUTH_TOKEN -v "$PWD":/src -w /src mcr.microsoft.com/dotnet/sdk:8.0 sh -c \
+  'dotnet tool install -g tcli >/dev/null 2>&1; /root/.dotnet/tools/tcli publish --file '"$ZIP"' --token "$TCLI_AUTH_TOKEN"'

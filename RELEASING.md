@@ -84,8 +84,8 @@ docker run --rm -v "$PWD":/src -v $ST:/valheim -w /src mcr.microsoft.com/dotnet/
 ```
 
 Package with python (`zipfile`) since `zip` isn't installed, then publish with
-`bin/publish` — it reads the token from `secret-provider` (`thunderstore_token`,
-stored once with `bin/set-thunderstore-token`) and runs `tcli` in the same
+`tools/publish` — it reads the token from `secret-provider` (`thunderstore_token`,
+stored once with `tools/set-thunderstore-token`) and runs `tcli` in the same
 container. Verify signatures after a Valheim update with
 `ilspycmd -il` on the built DLL (see 1.0.1 in the changelog for why).
 
