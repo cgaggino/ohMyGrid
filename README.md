@@ -115,6 +115,18 @@ Thunderstore Mod Manager profile under `BepInEx/plugins/`.
 
 - Targets Valheim **1.0** (1.0.1+; 1.0.0 was built for 0.221.x and does not work on 1.0).
 - BepInEx 5.x via `denikson-BepInExPack_Valheim` (5.4.2350+).
+- **Tested on Valheim 1.0.15 (network version 40)** with BepInExPack 5.4.2350, Windows,
+  1.0.2 build — play session with `BepInEx/LogOutput.log` review: 0 exceptions, seed
+  accounting exact (`planted=18 … paidHere=17 paidByVanilla=1`, 18 seeds in → 0 left),
+  ghosts render green/red with the cost overlay, Shift+E feeds only the aimed
+  kiln/smelter slot, F7 cycles all four center modes.
+
+### Known issues
+
+- Valheim's own requirement panel (bottom of the build UI) still shows the cost of
+  **one** plant while the donut is active; the mod's overlay at the top shows the real
+  batch cost (`Need: … × N (have M)`) and that is what gets charged. Cosmetic; planned
+  for 1.0.3.
 - Client-only — no `ServerSync`. Use freely on dedicated/multiplayer servers
   without forcing other players to install.
 

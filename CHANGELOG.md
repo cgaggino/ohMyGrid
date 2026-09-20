@@ -2,7 +2,12 @@
 
 ## 1.0.2 — 2026-09-20
 
-Runtime fixes found while play-testing 1.0.1 on Valheim 1.0.15.
+Runtime fixes found while play-testing 1.0.1 on Valheim 1.0.15. This build was play-tested
+on Valheim 1.0.15 (network version 40) + BepInExPack 5.4.2350: 0 exceptions in
+`LogOutput.log`, seed accounting exact, ghosts + overlay rendering, Shift+E targeting OK.
+
+Known issue: vanilla's requirement panel still shows the per-plant cost (1) while the
+donut is active; the top overlay shows the real batch cost. Cosmetic, planned for 1.0.3.
 
 - **Seeds are now charged for every plant.** Since 1.0, vanilla charges one piece
   *after* `TryPlacePiece` returns, so a donut of N plants cost 1 seed. The mod now
