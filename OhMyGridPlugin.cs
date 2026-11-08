@@ -24,11 +24,18 @@ namespace OhMyGrid
         private readonly Harmony _harmony = new Harmony(PluginGuid);
 
         public enum CenterMode { Player, Fixed, Cursor, CursorSnap }
-        public enum GeometryMode { Off, Donut }
+        public enum GeometryMode { Off, Donut, Wedge }
 
         private ConfigEntry<float> _innerRadius;
         private ConfigEntry<float> _outerRadius;
         private ConfigEntry<float> _spacing;
+        private ConfigEntry<bool> _ignoreReach;
+        private ConfigEntry<float> _wedgeHeading;
+        private ConfigEntry<float> _wedgeSweep;
+        private ConfigEntry<float> _wedgeAngleStep;
+        private ConfigEntry<bool> _wedgeAutoAdvance;
+        private ConfigEntry<bool> _wedgeMouseWheel;
+        private ConfigEntry<string> _anchorsConfig;
 
         private ConfigEntry<float> _autoSnapRadius;
         private ConfigEntry<CenterMode> _centerMode;
@@ -46,11 +53,24 @@ namespace OhMyGrid
         private ConfigEntry<KeyboardShortcut> _decreaseOuterHotkey;
         private ConfigEntry<KeyboardShortcut> _increaseInnerHotkey;
         private ConfigEntry<KeyboardShortcut> _decreaseInnerHotkey;
+        private ConfigEntry<KeyboardShortcut> _rotateWedgeCwHotkey;
+        private ConfigEntry<KeyboardShortcut> _rotateWedgeCcwHotkey;
+        private ConfigEntry<KeyboardShortcut> _widenWedgeHotkey;
+        private ConfigEntry<KeyboardShortcut> _narrowWedgeHotkey;
         private ConfigEntry<KeyboardShortcut> _massInteractHotkey;
 
         // Runtime state.
         private Vector3 _fixedCenter;
-        private bool _hasSnap;
+        // What CursorSnap is currently locked to: null (nothing), "anchor" or "centroid".
+        // Only used to toast on transitions, not every frame.
+        private string _snapSource;
+
+        // Centers of recent successful plantings, most recent first. CursorSnap prefers
+        // these over the plant centroid: a centroid is only the true center for a full
+        // donut, while a wedge's centroid sits halfway along its bisector.
+        private const int MaxAnchors = 16;
+        private const float AnchorMergeDistance = 0.5f;
+        private readonly List<Vector3> _anchors = new List<Vector3>();
 
         private readonly List<GameObject> _ghostClones = new List<GameObject>();
         // Cached per-clone Piece (parallel to _ghostClones) for the red-tint call.
@@ -66,6 +86,7 @@ namespace OhMyGrid
         private string _activePieceLabel;
         private int _validPointsCount;
         private int _totalPointsCount;
+        private int _outOfReachCount;
         // How many of the valid points the player can actually pay for (int.MaxValue = free build).
         private int _affordableCount = int.MaxValue;
         // Set when cloning the current source ghost failed; preview stays off (and quiet)
@@ -97,19 +118,39 @@ namespace OhMyGrid
                 "Outer radius (m) of the donut.");
             _spacing = Config.Bind("Grid", "Spacing", 1f,
                 "Spacing (m) between rings and target spacing along each ring.");
+            _ignoreReach = Config.Bind("Grid", "IgnoreReach", false,
+                "Plant points farther than your build reach (Player.m_maxPlaceDistance) too. " +
+                "Off = like vanilla: out-of-reach points are red and skipped.");
+            _wedgeHeading = Config.Bind("Wedge", "Heading", 0f,
+                "Compass direction (degrees, 0 = north, clockwise) the wedge points at, measured from the center.");
+            _wedgeSweep = Config.Bind("Wedge", "Sweep", 90f,
+                "Angular width (degrees) of the wedge. 90 = quarter circle, 180 = half, 360 = full donut.");
+            _wedgeAngleStep = Config.Bind("Wedge", "AngleStep", 15f,
+                "Degrees per rotate/widen hotkey press. 15 reaches 1/2, 1/3, 1/4, 1/6, 1/8 and 1/12 of a circle.");
+            _wedgeAutoAdvance = Config.Bind("Wedge", "AutoAdvance", true,
+                "After planting a wedge, rotate the heading by one sweep so the next wedge " +
+                "continues the circle right where the last one ended.");
+            _wedgeMouseWheel = Config.Bind("Wedge", "MouseWheelRotates", true,
+                "In Wedge mode, the mouse wheel (vanilla's rotate-piece input) rotates the wedge " +
+                "by one AngleStep instead of spinning the plant.");
 
             _autoSnapRadius = Config.Bind("Center", "AutoSnapRadius", 12f,
-                "Search radius (m) for CursorSnap. The donut snaps to the CENTROID " +
-                "of all Plants found within this radius from the cursor — so for " +
-                "concentric donut placement, this should be ≥ the outer radius of " +
-                "the existing donut you're aligning to.");
+                "Search radius (m) for CursorSnap. The center snaps to the nearest remembered " +
+                "planting center (see Anchors) within this radius from the cursor; if there is " +
+                "none, to the CENTROID of all Plants in range. Should be ≥ the outer radius of " +
+                "the donut/wedge you're aligning to.");
+            _anchorsConfig = Config.Bind("Center", "Anchors", "",
+                "Managed by the mod: centers of your last plantings (x,y,z;...), used by CursorSnap. " +
+                "Clear it to forget them.");
+            LoadAnchors();
             _centerMode = Config.Bind("Center", "Mode", CenterMode.Player,
                 "Current center mode. F7 cycles. Persists across sessions; if the " +
                 "saved value is Fixed it resets to Player on load (no persisted fixed center).");
             if (_centerMode.Value == CenterMode.Fixed) _centerMode.Value = CenterMode.Player;
 
             _geometryMode = Config.Bind("Geometry", "Mode", GeometryMode.Donut,
-                "Active geometry. Off = vanilla single-plant (mod disabled). Donut = circular ring(s). F6 cycles. Persists.");
+                "Active geometry. Off = vanilla single-plant (mod disabled). Donut = circular ring(s). " +
+                "Wedge = a slice of the donut (see [Wedge]). F6 cycles. Persists.");
 
             _showCostOverlay = Config.Bind("Overlay", "ShowCostOverlay", true,
                 "Show an on-screen overlay with valid-point count, required seeds and expected yield while a plant ghost is active.");
@@ -127,7 +168,7 @@ namespace OhMyGrid
                 "Cycle the donut center mode: Player → Fixed → Cursor → CursorSnap → Player.");
             _cycleGeometryHotkey = Config.Bind("Hotkeys", "CycleGeometry",
                 new KeyboardShortcut(KeyCode.F6),
-                "Cycle the geometry: Off → Donut → Off.");
+                "Cycle the geometry: Off → Donut → Wedge → Off.");
             _increaseOuterHotkey = Config.Bind("Hotkeys", "IncreaseOuter",
                 new KeyboardShortcut(KeyCode.RightBracket),
                 "Increase outer radius by one Spacing step.");
@@ -140,6 +181,18 @@ namespace OhMyGrid
             _decreaseInnerHotkey = Config.Bind("Hotkeys", "DecreaseInner",
                 new KeyboardShortcut(KeyCode.LeftBracket, KeyCode.LeftShift),
                 "Decrease inner radius by one Spacing step.");
+            _rotateWedgeCwHotkey = Config.Bind("Hotkeys", "RotateWedgeClockwise",
+                new KeyboardShortcut(KeyCode.Period),
+                "Rotate the wedge clockwise by one AngleStep.");
+            _rotateWedgeCcwHotkey = Config.Bind("Hotkeys", "RotateWedgeCounterClockwise",
+                new KeyboardShortcut(KeyCode.Comma),
+                "Rotate the wedge counter-clockwise by one AngleStep.");
+            _widenWedgeHotkey = Config.Bind("Hotkeys", "WidenWedge",
+                new KeyboardShortcut(KeyCode.Period, KeyCode.LeftShift),
+                "Widen the wedge by one AngleStep.");
+            _narrowWedgeHotkey = Config.Bind("Hotkeys", "NarrowWedge",
+                new KeyboardShortcut(KeyCode.Comma, KeyCode.LeftShift),
+                "Narrow the wedge by one AngleStep.");
             _massInteractHotkey = Config.Bind("Hotkeys", "MassInteract",
                 new KeyboardShortcut(KeyCode.E, KeyCode.LeftShift),
                 "Mass-interact with all Pickable / Fireplace / Smelter switches in range.");
@@ -182,6 +235,13 @@ namespace OhMyGrid
                 if (_increaseOuterHotkey.Value.IsDown()) AdjustRadius(_outerRadius, +step);
                 else if (_decreaseOuterHotkey.Value.IsDown()) AdjustRadius(_outerRadius, -step);
             }
+
+            // Same modifier-first ordering as the radius keys: Shift+. widens, bare . rotates.
+            var angleStep = Mathf.Max(_wedgeAngleStep.Value, 1f);
+            if (_widenWedgeHotkey.Value.IsDown()) AdjustSweep(+angleStep);
+            else if (_narrowWedgeHotkey.Value.IsDown()) AdjustSweep(-angleStep);
+            else if (_rotateWedgeCwHotkey.Value.IsDown()) RotateWedge(+angleStep);
+            else if (_rotateWedgeCcwHotkey.Value.IsDown()) RotateWedge(-angleStep);
 
             if (_massInteractEnabled.Value && _massInteractHotkey.Value.IsDown())
             {
@@ -249,7 +309,8 @@ namespace OhMyGrid
             switch (g)
             {
                 case GeometryMode.Off: return GeometryMode.Donut;
-                case GeometryMode.Donut: return GeometryMode.Off;
+                case GeometryMode.Donut: return GeometryMode.Wedge;
+                case GeometryMode.Wedge: return GeometryMode.Off;
                 default: return GeometryMode.Donut;
             }
         }
@@ -261,12 +322,48 @@ namespace OhMyGrid
                         $"(inner={_innerRadius.Value:0.##} outer={_outerRadius.Value:0.##})");
         }
 
+        private void RotateWedge(float delta)
+        {
+            _wedgeHeading.Value = Mathf.Repeat(_wedgeHeading.Value + delta, 360f);
+            var msg = $"Wedge heading: {_wedgeHeading.Value:0.#}°";
+            Log.LogInfo(msg);
+            if (_geometryMode.Value == GeometryMode.Wedge) ShowHudMessage(msg);
+        }
+
+        private void AdjustSweep(float delta)
+        {
+            var minSweep = Mathf.Max(_wedgeAngleStep.Value, 1f);
+            _wedgeSweep.Value = Mathf.Clamp(_wedgeSweep.Value + delta, minSweep, 360f);
+            var msg = $"Wedge sweep: {FormatSweep(_wedgeSweep.Value)}";
+            Log.LogInfo(msg);
+            if (_geometryMode.Value == GeometryMode.Wedge) ShowHudMessage(msg);
+        }
+
+        // "90° (1/4)" when the sweep divides the circle evenly, otherwise just "100°".
+        private static string FormatSweep(float sweep)
+        {
+            var parts = 360f / sweep;
+            var rounded = Mathf.Round(parts);
+            return Mathf.Abs(parts - rounded) < 0.01f && rounded > 1f
+                ? $"{sweep:0.#}° (1/{rounded:0})"
+                : $"{sweep:0.#}°";
+        }
+
+        private IEnumerable<GridPoint> GeneratePoints(Vector3 center)
+        {
+            if (_geometryMode.Value == GeometryMode.Wedge)
+            {
+                return GridGenerator.Wedge(center.x, center.z,
+                    _innerRadius.Value, _outerRadius.Value, _spacing.Value,
+                    _wedgeHeading.Value, Mathf.Clamp(_wedgeSweep.Value, 1f, 360f));
+            }
+            return GridGenerator.Donut(center.x, center.z,
+                _innerRadius.Value, _outerRadius.Value, _spacing.Value);
+        }
+
         private Vector3 GetDonutCenter(Player player, GameObject ghost)
         {
-            if (_centerMode.Value != CenterMode.CursorSnap && _hasSnap)
-            {
-                _hasSnap = false;
-            }
+            if (_centerMode.Value != CenterMode.CursorSnap) _snapSource = null;
 
             switch (_centerMode.Value)
             {
@@ -279,23 +376,23 @@ namespace OhMyGrid
                 case CenterMode.CursorSnap:
                 {
                     var basePos = ghost != null ? ghost.transform.position : player.transform.position;
+                    var anchor = FindNearestAnchor(basePos, _autoSnapRadius.Value);
+                    if (anchor.HasValue)
+                    {
+                        SetSnapSource("anchor", anchor.Value);
+                        return anchor.Value;
+                    }
                     var centroid = FindPlantCentroid(basePos, _autoSnapRadius.Value);
                     if (centroid.HasValue)
                     {
-                        if (!_hasSnap)
-                        {
-                            var c = centroid.Value;
-                            Log.LogInfo($"AutoSnap → centroid ({c.x:0.##}, {c.z:0.##}).");
-                            ShowHudMessage("AutoSnap: locked");
-                            _hasSnap = true;
-                        }
+                        SetSnapSource("centroid", centroid.Value);
                         return centroid.Value;
                     }
-                    if (_hasSnap)
+                    if (_snapSource != null)
                     {
                         Log.LogInfo("AutoSnap: no plants in range.");
                         ShowHudMessage("AutoSnap: lost");
-                        _hasSnap = false;
+                        _snapSource = null;
                     }
                     return basePos;
                 }
@@ -303,6 +400,79 @@ namespace OhMyGrid
                 case CenterMode.Player:
                 default:
                     return player.transform.position;
+            }
+        }
+
+        private void SetSnapSource(string source, Vector3 c)
+        {
+            if (_snapSource == source) return;
+            _snapSource = source;
+            Log.LogInfo($"AutoSnap → {source} ({c.x:0.##}, {c.z:0.##}).");
+            ShowHudMessage($"AutoSnap: {source}");
+        }
+
+        private Vector3? FindNearestAnchor(Vector3 from, float radius)
+        {
+            Vector3? best = null;
+            var bestSq = radius * radius;
+            for (int i = 0; i < _anchors.Count; i++)
+            {
+                var dx = _anchors[i].x - from.x;
+                var dz = _anchors[i].z - from.z;
+                var sq = dx * dx + dz * dz;
+                if (sq <= bestSq)
+                {
+                    bestSq = sq;
+                    best = _anchors[i];
+                }
+            }
+            return best;
+        }
+
+        // Moves `center` to the front of the anchor list, merging it with any anchor
+        // already within AnchorMergeDistance (re-planting around a snapped center lands
+        // on the same spot, so this keeps one entry per field).
+        private void RememberAnchor(Vector3 center)
+        {
+            for (int i = _anchors.Count - 1; i >= 0; i--)
+            {
+                var dx = _anchors[i].x - center.x;
+                var dz = _anchors[i].z - center.z;
+                if (dx * dx + dz * dz <= AnchorMergeDistance * AnchorMergeDistance) _anchors.RemoveAt(i);
+            }
+            _anchors.Insert(0, center);
+            if (_anchors.Count > MaxAnchors) _anchors.RemoveRange(MaxAnchors, _anchors.Count - MaxAnchors);
+
+            var sb = new StringBuilder();
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            for (int i = 0; i < _anchors.Count; i++)
+            {
+                if (i > 0) sb.Append(';');
+                var a = _anchors[i];
+                sb.Append(a.x.ToString("0.###", inv)).Append(',')
+                  .Append(a.y.ToString("0.###", inv)).Append(',')
+                  .Append(a.z.ToString("0.###", inv));
+            }
+            _anchorsConfig.Value = sb.ToString();
+        }
+
+        private void LoadAnchors()
+        {
+            _anchors.Clear();
+            var raw = _anchorsConfig.Value;
+            if (string.IsNullOrEmpty(raw)) return;
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            foreach (var entry in raw.Split(';'))
+            {
+                var parts = entry.Split(',');
+                if (parts.Length != 3) continue;
+                if (float.TryParse(parts[0], System.Globalization.NumberStyles.Float, inv, out var x) &&
+                    float.TryParse(parts[1], System.Globalization.NumberStyles.Float, inv, out var y) &&
+                    float.TryParse(parts[2], System.Globalization.NumberStyles.Float, inv, out var z))
+                {
+                    _anchors.Add(new Vector3(x, y, z));
+                    if (_anchors.Count == MaxAnchors) break;
+                }
             }
         }
 
@@ -337,15 +507,17 @@ namespace OhMyGrid
             if (player == null) { Log.LogInfo("DumpGrid: no local player (in menu?)."); return; }
             var center = GetDonutCenter(player, PlacementGhostRef(player));
             Log.LogInfo(
-                $"Donut grid @ ({center.x:0.##}, {center.z:0.##}) " +
-                $"inner={_innerRadius.Value} outer={_outerRadius.Value} spacing={_spacing.Value}");
+                $"{_geometryMode.Value} grid @ ({center.x:0.##}, {center.z:0.##}) " +
+                $"inner={_innerRadius.Value} outer={_outerRadius.Value} spacing={_spacing.Value}" +
+                (_geometryMode.Value == GeometryMode.Wedge
+                    ? $" heading={_wedgeHeading.Value} sweep={_wedgeSweep.Value}"
+                    : ""));
             var count = 0;
-            foreach (var p in GridGenerator.Donut(center.x, center.z,
-                         _innerRadius.Value, _outerRadius.Value, _spacing.Value))
+            foreach (var p in GeneratePoints(center))
             {
                 Log.LogInfo($"  [{count++}] {p}");
             }
-            Log.LogInfo($"Donut grid: {count} points.");
+            Log.LogInfo($"{_geometryMode.Value} grid: {count} points.");
         }
 
         private void UpdateGhostClones()
@@ -399,8 +571,7 @@ namespace OhMyGrid
 
             var center = GetDonutCenter(player, ghost);
             var points = new List<GridPoint>();
-            foreach (var p in GridGenerator.Donut(center.x, center.z,
-                         _innerRadius.Value, _outerRadius.Value, _spacing.Value))
+            foreach (var p in GeneratePoints(center))
             {
                 points.Add(p);
             }
@@ -447,6 +618,7 @@ namespace OhMyGrid
             var sourcePieceForCost = ghost.GetComponent<Piece>();
             var affordable = CountAffordable(player, sourcePieceForCost);
             var valid = 0;
+            var outOfReach = 0;
 
             for (int i = 0; i < points.Count; i++)
             {
@@ -458,10 +630,11 @@ namespace OhMyGrid
                 clone.transform.rotation = originalSourceRot;
                 if (!clone.activeSelf) clone.SetActive(true);
 
-                // Out of reach? Red, never planted.
+                // Out of reach? Red, never planted (unless IgnoreReach).
                 var dx = pt.X - playerXZ.x;
                 var dz = pt.Z - playerXZ.y;
-                var tooFar = dx * dx + dz * dz > maxPlaceDistSq;
+                var tooFar = !_ignoreReach.Value && dx * dx + dz * dz > maxPlaceDistSq;
+                if (tooFar) outOfReach++;
 
                 // Cultivated ground required for most plants (carrots/turnips/onions/etc).
                 var notCultivated = needsCultivated && !IsCultivatedAt(pos);
@@ -482,6 +655,7 @@ namespace OhMyGrid
             ghost.transform.position = originalSourcePos;
             ghost.transform.rotation = originalSourceRot;
             _validPointsCount = valid;
+            _outOfReachCount = outOfReach;
             _affordableCount = affordable;
             for (int i = points.Count; i < _ghostClones.Count; i++)
             {
@@ -498,9 +672,15 @@ namespace OhMyGrid
         /// Plant.SUpdate NREs). So: instantiate INACTIVE (no Awake), remove Plant and any
         /// stray ZNetView, then activate. Piece stays (Awake is harmless without a
         /// ZNetView) because SetInvalidPlacementHeightlight is what tints the clone.
+        /// The source ghost's red tint is cleared first: Instantiate copies the tinted
+        /// materials but not Piece's private "original materials" backup, so a clone made
+        /// while vanilla showed the cursor ghost red would stay red forever (un-tinting
+        /// has nothing to restore). Vanilla re-tints the source on its next update.
         /// </summary>
         private static GameObject CreateGhostClone(GameObject ghost)
         {
+            var sourcePiece = ghost.GetComponent<Piece>();
+            if (sourcePiece != null) sourcePiece.SetInvalidPlacementHeightlight(false);
             var wasActive = ghost.activeSelf;
             ghost.SetActive(false);
             GameObject clone;
@@ -631,8 +811,7 @@ namespace OhMyGrid
             _inDonutPlace = true;
             try
             {
-                foreach (var p in GridGenerator.Donut(center.x, center.z,
-                             _innerRadius.Value, _outerRadius.Value, _spacing.Value))
+                foreach (var p in GeneratePoints(center))
                 {
                     if (!freeBuild && CountAffordable(player, piece) < unpaid + 1)
                     {
@@ -642,7 +821,7 @@ namespace OhMyGrid
 
                     var dx = p.X - playerXZ.x;
                     var dz = p.Z - playerXZ.y;
-                    if (dx * dx + dz * dz > maxPlaceDistSq)
+                    if (!_ignoreReach.Value && dx * dx + dz * dz > maxPlaceDistSq)
                     {
                         tooFar++;
                         continue;
@@ -701,6 +880,19 @@ namespace OhMyGrid
                 $" paidHere={(freeBuild ? 0 : Mathf.Max(planted - 1, 0))} paidByVanilla={(planted > 0 && !freeBuild ? 1 : 0)}" +
                 (freeBuild ? " (free build)" : "") +
                 (outOfResources ? " (out of resources)" : ""));
+
+            if (planted > 0)
+            {
+                RememberAnchor(center);
+                if (_geometryMode.Value == GeometryMode.Wedge && _wedgeAutoAdvance.Value &&
+                    _wedgeSweep.Value < 360f)
+                {
+                    _wedgeHeading.Value = Mathf.Repeat(_wedgeHeading.Value + _wedgeSweep.Value, 360f);
+                    var msg = $"Next wedge → heading {_wedgeHeading.Value:0.#}°";
+                    Log.LogInfo(msg);
+                    ShowHudMessage(msg);
+                }
+            }
             return planted > 0;
         }
 
@@ -726,9 +918,19 @@ namespace OhMyGrid
             {
                 sb.Append(" · can afford ").Append(willPlant);
             }
-            sb.Append("\nDonut · inner ").Append(_innerRadius.Value.ToString("0.##"))
+            if (_outOfReachCount > 0)
+            {
+                sb.Append(" · out of reach ").Append(_outOfReachCount).Append(" (get closer)");
+            }
+            sb.Append('\n').Append(_geometryMode.Value)
+              .Append(" · inner ").Append(_innerRadius.Value.ToString("0.##"))
               .Append("m · outer ").Append(_outerRadius.Value.ToString("0.##"))
               .Append("m · spacing ").Append(_spacing.Value.ToString("0.##")).Append('m');
+            if (_geometryMode.Value == GeometryMode.Wedge)
+            {
+                sb.Append("\nHeading ").Append(_wedgeHeading.Value.ToString("0.#"))
+                  .Append("° · sweep ").Append(FormatSweep(_wedgeSweep.Value));
+            }
 
             if (_activeResources != null)
             {
@@ -923,6 +1125,43 @@ namespace OhMyGrid
 
                 __result = Instance.PlaceDonut(__instance, piece, ghost);
                 return false;
+            }
+        }
+
+        // Vanilla turns the wheel (and the gamepad rotate buttons) into m_placeRotation
+        // steps inside UpdatePlacement. In Wedge mode we undo that change afterwards and
+        // spend it on the wedge heading instead, so we never depend on the input API.
+        [HarmonyPatch(typeof(Player), "UpdatePlacement")]
+        private static class UpdatePlacementPatch
+        {
+            private static readonly System.Reflection.FieldInfo PlaceRotationField =
+                AccessTools.Field(typeof(Player), "m_placeRotation");
+
+            private static bool Active(Player player)
+            {
+                if (Instance == null || !Instance._wedgeMouseWheel.Value) return false;
+                if (Instance._geometryMode.Value != GeometryMode.Wedge) return false;
+                if (PlaceRotationField == null || PlaceRotationField.FieldType != typeof(int)) return false;
+                if (player != Player.m_localPlayer) return false;
+                var ghost = PlacementGhostRef(player);
+                return ghost != null && ghost.GetComponent<Plant>() != null;
+            }
+
+            [HarmonyPrefix]
+            private static void Prefix(Player __instance, out int __state)
+            {
+                __state = Active(__instance) ? (int)PlaceRotationField.GetValue(__instance) : int.MinValue;
+            }
+
+            [HarmonyPostfix]
+            private static void Postfix(Player __instance, int __state)
+            {
+                if (__state == int.MinValue) return;
+                var now = (int)PlaceRotationField.GetValue(__instance);
+                if (now == __state) return;
+                PlaceRotationField.SetValue(__instance, __state);
+                // Positive m_placeRotation is a clockwise yaw, same sense as compass heading.
+                Instance.RotateWedge((now - __state) * Mathf.Max(Instance._wedgeAngleStep.Value, 1f));
             }
         }
 

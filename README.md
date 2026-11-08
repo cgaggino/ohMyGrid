@@ -44,13 +44,15 @@ All hotkeys are configurable under `[Hotkeys]` in the config file.
 
 | Key | Action |
 |---|---|
-| `F6` | Cycle geometry: `Off ↔ Donut` |
+| `F6` | Cycle geometry: `Off → Donut → Wedge → Off` |
 | `F7` | Cycle center mode: `Player → Fixed → Cursor → CursorSnap → Player` |
 | `F8` | Dump every donut grid point to the BepInEx log |
 | `]` | Outer radius +1 spacing step |
 | `[` | Outer radius −1 spacing step |
 | `Shift+]` | Inner radius +1 spacing step |
 | `Shift+[` | Inner radius −1 spacing step |
+| `.` / `,` or mouse wheel | Rotate wedge clockwise / counter-clockwise (one `AngleStep`) |
+| `Shift+.` / `Shift+,` | Widen / narrow wedge (one `AngleStep`) |
 | `Left-click` | Plant the entire donut (when holding a Plant ghost) |
 | `Shift+E` | Mass-interact with the hovered object's type in range |
 
