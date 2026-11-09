@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.1.0 — 2026-11-08
+
+New geometry: **Wedge** (a slice of the donut), built to complete a circle one
+crop at a time. Play-tested on Valheim 1.0.21 (network version 41) + BepInExPack
+5.4.2360: a half circle built from four wedges of different crops, no shared
+edge plants, 0 OhMyGrid exceptions in `LogOutput.log`.
+
+- **Wedge geometry.** `F6` now cycles `Off → Donut → Wedge → Off`. A wedge uses
+  the same inner/outer radius and spacing as the donut, plus a heading and a
+  sweep. Rotate it with the **mouse wheel** or `.` / `,`, and widen or narrow it
+  with `Shift+.` / `Shift+,`. Steps are 15°, so you can reach 1/2, 1/3, 1/4,
+  1/6, 1/8 and 1/12 of a circle. The overlay shows `Heading 345° · sweep 45° (1/8)`.
+- **Wedges tile the circle exactly.** Every wedge is cut from the donut's own
+  point lattice with half-open edges. Wedges around one center add up to
+  exactly the donut: no doubled edge rows, no crowded tip, no gaps. The center
+  point belongs to the wedge that contains north.
+- **Auto-advance.** After you plant a wedge, the heading rotates by one sweep,
+  so the next click continues the circle (`[Wedge] AutoAdvance`).
+- **Snap to remembered centers.** Each planting saves its center as an anchor
+  (the last 16, persisted). `CursorSnap` snaps to the nearest anchor first and
+  falls back to the plant centroid only when there is no anchor. Partial
+  circles now resolve to their true center, so concentric donuts also snap
+  exactly.
+- **Out-of-reach is explained.** The overlay shows `out of reach N (get closer)`
+  when points are red only because they are beyond your build reach. A new
+  `[Grid] IgnoreReach` option (off by default) plants them anyway.
+- **Fix:** ghost previews created while the vanilla cursor ghost was red (for
+  example while aiming at an existing plant) stayed red forever.
+
 ## 1.0.2 — 2026-09-20
 
 Runtime fixes found while play-testing 1.0.1 on Valheim 1.0.15. This build was play-tested
